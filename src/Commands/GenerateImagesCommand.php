@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types = 1);
+declare(strict_types=1);
 
 namespace Isapp\ImageTools\Commands;
 
@@ -80,10 +80,10 @@ class GenerateImagesCommand extends Command
     /**
      * Parse a PHP string to AST and collect occurrences of ImageTools::asset('...') static calls.
      *
-     * @param string $php The PHP source to analyze.
-     * @param \PhpParser\Parser $parser Parser instance.
-     * @param array $wanted Collected "path?query" strings (by reference).
-     * @param string $origin Optional filename used for warnings.
+     * @param  string  $php  The PHP source to analyze.
+     * @param  \PhpParser\Parser  $parser  Parser instance.
+     * @param  array  $wanted  Collected "path?query" strings (by reference).
+     * @param  string  $origin  Optional filename used for warnings.
      */
     private function collectFromPhp(string $php, $parser, array &$wanted, string $origin = ''): void
     {
@@ -97,10 +97,9 @@ class GenerateImagesCommand extends Command
 
         $traverser = new NodeTraverser;
         $traverser->addVisitor(
-            new class($wanted) extends NodeVisitorAbstract {
-                public function __construct(public array &$wanted)
-                {
-                }
+            new class($wanted) extends NodeVisitorAbstract
+            {
+                public function __construct(public array &$wanted) {}
 
                 public function enterNode(Node $node): void
                 {
@@ -109,6 +108,7 @@ class GenerateImagesCommand extends Command
                         $class = $node->class;
                         if ($class instanceof Node\Name && $class->toString() === 'ImageTools') {
                             $this->recordCall($node->args);
+
                             return;
                         }
                     }
@@ -122,6 +122,7 @@ class GenerateImagesCommand extends Command
                         if ($target instanceof Node\Expr\FuncCall && $this->nameIs($target->name, 'app')) {
                             if ($this->isImageToolsServiceArg($target->args[0] ?? null)) {
                                 $this->recordCall($node->args);
+
                                 return;
                             }
                         }
@@ -129,10 +130,11 @@ class GenerateImagesCommand extends Command
                         // App::make(ImageTools::class|'image-tools')
                         if ($target instanceof Node\Expr\StaticCall && $this->nameIs($target->name, 'make')) {
                             $className = $target->class instanceof Node\Name ? $target->class->toString() : null;
-                            if (in_array($className, ['App', 'Illuminate\\Support\\Facades\\App'], true) &&
+                            if (\in_array($className, ['App', 'Illuminate\\Support\\Facades\\App'], true) &&
                                 $this->isImageToolsServiceArg($target->args[0] ?? null)
                             ) {
                                 $this->recordCall($node->args);
+
                                 return;
                             }
                         }
@@ -181,6 +183,7 @@ class GenerateImagesCommand extends Command
                         $value->class instanceof Node\Name
                     ) {
                         $fqcn = $value->class->toString();
+
                         return $fqcn === 'ImageTools' ||
                             $fqcn === 'Isapp\\ImageTools\\ImageTools' ||
                             str_ends_with($fqcn, '\\ImageTools');

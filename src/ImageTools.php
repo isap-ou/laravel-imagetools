@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types = 1);
+declare(strict_types=1);
 
 namespace Isapp\ImageTools;
 
@@ -12,7 +12,6 @@ use Illuminate\Validation\Rule;
 use Spatie\Image\Enums\Fit;
 use Spatie\Image\Image;
 
-use function array_key_exists;
 use function array_pad;
 use function base_path;
 use function config;
@@ -22,7 +21,6 @@ use function ksort;
 use function parse_str;
 use function pathinfo;
 use function sha1;
-use function sprintf;
 use function storage_path;
 use function substr;
 
@@ -79,8 +77,8 @@ class ImageTools
      * Return a public URL for a given "path?query".
      * If the canonical key is missing in the manifest, generate the image first and then return its URL.
      *
-     * @param string $path Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
-     * @param string $manifest Manifest namespace ('default' by default)
+     * @param  string  $path  Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
+     * @param  string  $manifest  Manifest namespace ('default' by default)
      */
     public function asset(string $path, string $manifest = 'default'): string
     {
@@ -96,7 +94,7 @@ class ImageTools
         $pathSeed = $this->getPathSeed($path);
 
         // If not yet generated, create the derivative and refresh manifest cache.
-        if (! array_key_exists($pathSeed, $manifestData)) {
+        if (! \array_key_exists($pathSeed, $manifestData)) {
             $info = $this->generate($pathSeed, $manifest);
 
             if ($info === null) {
@@ -182,7 +180,7 @@ class ImageTools
         ksort($validatedOptions);
         $nameSeed = $filepath . '?' . http_build_query($validatedOptions);
 
-        $fileName = sprintf(
+        $fileName = \sprintf(
             '%s--%s.%s',
             str($pathInfo['filename'])->slug('-')->toString(),
             substr(sha1($nameSeed), 0, 10),

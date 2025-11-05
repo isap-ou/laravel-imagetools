@@ -7,7 +7,6 @@ namespace Isapp\ImageTools\Tests;
 use Illuminate\Support\Facades\Config;
 use Isapp\ImageTools\ServiceProvider;
 use Orchestra\Testbench\TestCase as BaseTestCase;
-use Spatie\Image\Enums\ImageDriver;
 
 class TestCase extends BaseTestCase
 {

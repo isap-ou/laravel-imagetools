@@ -15,6 +15,7 @@ class GetPathSeedTest extends TestCase
         $ref = new ReflectionClass($it);
         $m = $ref->getMethod('getPathSeed');
         $m->setAccessible(true);
+
         return $m->invoke($it, $path);
     }
 

@@ -19,6 +19,7 @@ use function base_path;
 class ClearGeneratedImagesCommand extends Command
 {
     protected $signature = 'imagetools:clear';
+
     protected $description = 'Clear generated ImageTools files and remove the manifest.';
 
     public function handle(): int
