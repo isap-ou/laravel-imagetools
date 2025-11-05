@@ -1,10 +1,12 @@
 # Laravel Image Tools
 
+Deterministic, query‑driven image generation for Laravel — inspired by **vite-imagetools**.
+
+<p><a href="https://isapp.be/laravel-imagetools" target="_blank"><img src="https://static.isap.me/laravel-imagetools.png" alt="Laravel Image Tools by ISAPP" /></a></p>
+
 [![Packagist](https://img.shields.io/packagist/v/isapp/laravel-imagetools.svg)](https://packagist.org/packages/isapp/laravel-imagetools)
 [![PHP](https://img.shields.io/packagist/php-v/isapp/laravel-imagetools.svg)](https://packagist.org/packages/isapp/laravel-imagetools)
 [![License](https://img.shields.io/github/license/isap-ou/laravel-imagetools.svg)](#license)
-
-Deterministic, query‑driven image generation for Laravel — inspired by **vite-imagetools**.
 
 - Call it once in Blade/PHP and get a public URL:
   ```blade
