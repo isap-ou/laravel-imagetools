@@ -1,0 +1,64 @@
+{
+  "$schema": "https://getcomposer.org/schema.json",
+  "name": "isapp/laravel-imagetools",
+  "description": "Laravel image tools: deterministic, query-driven image generation (vite-imagetools-like).",
+  "type": "library",
+  "license": "MIT",
+  "keywords": [
+    "laravel",
+    "image",
+    "imagetools",
+    "spatie",
+    "cdn",
+    "optimizer"
+  ],
+  "support": {
+    "issues": "https://github.com/isap-ou/laravel-imagetools/issues",
+    "source": "https://github.com/isap-ou/laravel-imagetools"
+  },
+  "require": {
+    "php": "^8.2",
+    "illuminate/support": "^10.0|^11.0|^12.0",
+    "illuminate/filesystem": "^10.0|^11.0|^12.0",
+    "illuminate/view": "^10.0|^11.0|^12.0",
+    "nikic/php-parser": "^5",
+    "spatie/image": "^3",
+    "symfony/finder": "^6.4|^7.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Isapp\\ImageTools\\": "src/"
+    }
+  },
+  "require-dev": {
+    "laravel/pint": "^1",
+    "roave/security-advisories": "dev-latest"
+  },
+  "suggest": {
+    "spatie/image-optimizer": "Lossless optimization of output images (requires system binaries like jpegoptim, pngquant, gifsicle, svgo)."
+  },
+  "config": {
+    "sort-packages": true
+  },
+  "prefer-stable": true,
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Isapp\\ImageTools\\ServiceProvider"
+      ],
+      "aliases": {
+        "ImageTools": "Isapp\\ImageTools\\Facades\\ImageTools"
+      }
+    }
+  },
+  "authors": [
+    {
+      "name": "Andrii Trush",
+      "email": "andrii.trush@isapp.be"
+    }
+  ],
+  "scripts": {
+    "format": "pint",
+    "format:fix": "pint -v"
+  }
+}

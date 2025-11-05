@@ -1,0 +1,27 @@
+{
+  "preset": "laravel",
+  "rules": {
+    "array_syntax": {
+      "syntax": "short"
+    },
+    "declare_strict_types": true,
+    "no_unused_imports": true,
+    "blank_line_after_namespace": true,
+    "blank_line_after_opening_tag": true,
+    "blank_line_between_import_groups": true,
+    "native_function_invocation": true,
+    "single_trait_insert_per_statement": true,
+    "fully_qualified_strict_types": true,
+    "concat_space": {
+      "spacing": "one"
+    },
+    "ordered_imports": {
+      "sort_algorithm": "alpha",
+      "imports_order": [
+        "const",
+        "class",
+        "function"
+      ]
+    }
+  }
+}
