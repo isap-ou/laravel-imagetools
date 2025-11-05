@@ -79,8 +79,8 @@ class ImageTools
      * Return a public URL for a given "path?query".
      * If the canonical key is missing in the manifest, generate the image first and then return its URL.
      *
-     * @param string $path      Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
-     * @param string $manifest  Manifest namespace ('default' by default)
+     * @param string $path Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
+     * @param string $manifest Manifest namespace ('default' by default)
      */
     public function asset(string $path, string $manifest = 'default'): string
     {
@@ -142,8 +142,8 @@ class ImageTools
 
         // Validate supported query options. 'w' and 'h' are required together when 'fit' is used.
         $validatedOptions = Validator::validate($options, [
-            'w' => ['required_with:fit', 'integer','min:1'],
-            'h' => ['required_with:fit', 'integer','min:1'],
+            'w' => ['required_with:fit', 'integer', 'min:1'],
+            'h' => ['required_with:fit', 'integer', 'min:1'],
             'q' => ['max:100', 'min:1', 'integer'],
             'fit' => ['nullable', Rule::enum(Fit::class)],
             'format' => ['nullable', Rule::in(['jpeg', 'png', 'gif', 'webp', 'avif'])],
@@ -161,15 +161,15 @@ class ImageTools
         // Cast to int to satisfy the image driver type hints.
         if (! empty($validatedOptions['fit'])) {
             $fit = Fit::from($validatedOptions['fit']);
-            $image->fit($fit, (int)$validatedOptions['w'], (int)$validatedOptions['h']);
+            $image->fit($fit, (int) $validatedOptions['w'], (int) $validatedOptions['h']);
         } elseif (! empty($validatedOptions['w'])) {
-            $image->width((int)$validatedOptions['w']);
+            $image->width((int) $validatedOptions['w']);
         } elseif (! empty($validatedOptions['h'])) {
-            $image->height((int)$validatedOptions['h']);
+            $image->height((int) $validatedOptions['h']);
         }
         // Apply output quality (1..100).
         if (! empty($validatedOptions['q'])) {
-            $image->quality((int)$validatedOptions['q']);
+            $image->quality((int) $validatedOptions['q']);
         }
 
         // Decide output extension: overridden by 'format', else source extension.
@@ -253,6 +253,11 @@ class ImageTools
 
         // Sort query keys to normalize the seed.
         ksort($options);
+
+        if (empty($options)) {
+            return $filepath;
+        }
+
         return $filepath . '?' . http_build_query($options);
     }
 }

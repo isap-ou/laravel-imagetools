@@ -87,7 +87,6 @@ class GenerateImagesCommand extends Command
      */
     private function collectFromPhp(string $php, $parser, array &$wanted, string $origin = ''): void
     {
-        xdebug_break();
         try {
             $ast = $parser->parse($php);
         } catch (\Throwable $e) {

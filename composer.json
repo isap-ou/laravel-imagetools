@@ -32,6 +32,8 @@
   },
   "require-dev": {
     "laravel/pint": "^1",
+    "orchestra/testbench": "^10.6",
+    "phpunit/phpunit": "^11.5",
     "roave/security-advisories": "dev-latest"
   },
   "suggest": {
@@ -58,7 +60,14 @@
     }
   ],
   "scripts": {
-    "format": "pint",
-    "format:fix": "pint -v"
+    "lint": [
+      "@php vendor/bin/pint --ansi"
+    ],
+    "test": "vendor/bin/phpunit --colors=always"
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Isapp\\ImageTools\\Tests\\": "tests/"
+    }
   }
 }

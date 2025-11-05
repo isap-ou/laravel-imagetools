@@ -7,3 +7,4 @@ gen
 .DS_Store
 composer.lock
 /vendor/
+/.phpunit.cache/
