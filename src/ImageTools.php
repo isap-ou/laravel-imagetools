@@ -184,8 +184,6 @@ class ImageTools
         } else {
             $nameSeed = $filepath;
         }
-        
-        $nameSeed = $filepath . '?' . http_build_query($validatedOptions);
 
         $fileName = \sprintf(
             '%s--%s.%s',
