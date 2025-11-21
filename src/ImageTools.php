@@ -178,6 +178,13 @@ class ImageTools
 
         // Build a deterministic name seed from the sorted options to keep filenames stable.
         ksort($validatedOptions);
+
+        if (! empty($validatedOptions)) {
+            $nameSeed = $filepath . '?' . http_build_query($validatedOptions);
+        } else {
+            $nameSeed = $filepath;
+        }
+        
         $nameSeed = $filepath . '?' . http_build_query($validatedOptions);
 
         $fileName = \sprintf(
