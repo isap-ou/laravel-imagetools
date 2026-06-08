@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org).
   and a broken URL. Both paths now share a single canonicalization. ([#3])
 
 ### Internal
+- Split the `ImageTools` god class into injected collaborators —
+  `Support\Manifest`, `Support\PathResolver`, `Support\SourceReader` — wired via the
+  service provider. No behaviour change.
 - Tests for the `imagetools:generate` / `imagetools:clear` commands; CI matrix
   (PHP 8.2–8.4 × Laravel 12/13) + Pint workflow; Dependabot. ([#4])
 - S3 integration test against MinIO (PHPUnit group `s3`) + dedicated CI job. ([#6])
