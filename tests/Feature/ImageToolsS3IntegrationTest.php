@@ -109,4 +109,18 @@ class ImageToolsS3IntegrationTest extends TestCase
         $this->artisan('imagetools:clear')->assertSuccessful();
         Storage::disk('s3')->assertMissing($path);
     }
+
+    public function test_disk_reads_the_source_original_from_s3(): void
+    {
+        // Upload an original that lives only on S3 (not at base_path).
+        Storage::disk('s3')->put('sources/remote.png', File::get(base_path('public/images/s3.png')));
+
+        $info = app(ImageTools::class)->disk('s3')->generate('sources/remote.png?w=16&format=webp');
+
+        $this->assertIsArray($info);
+        Storage::disk('s3')->assertExists($info['path']);
+        $this->assertNotEmpty(Storage::disk('s3')->get($info['path']));
+
+        Storage::disk('s3')->delete('sources/remote.png');
+    }
 }

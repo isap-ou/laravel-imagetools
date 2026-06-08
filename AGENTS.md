@@ -50,7 +50,9 @@ ahead of time (scanner command), or on a queue.
   `getPathSeed()` and `storedFileInfo()`. Divergence causes cache misses and broken URLs.
 - `queue` is a **control flag**, deliberately excluded from the seed, so it never affects
   the filename or manifest key.
-- Default (non‑queued) behaviour must remain fully **synchronous** and unchanged.
+- The **source disk** (set via `disk()`) is folded into the seed so the same path read from
+  different disks never collides; it is used only as a key/hash input, never parsed as a path.
+- Default (non‑queued, local‑source) behaviour must remain fully **synchronous** and unchanged.
 
 ## Where to read more
 

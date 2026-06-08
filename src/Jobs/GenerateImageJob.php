@@ -26,6 +26,7 @@ class GenerateImageJob implements ShouldBeUnique, ShouldQueue
     public function __construct(
         public string $path,
         public string $manifest = 'default',
+        public ?string $sourceDisk = null,
     ) {
         $this->onConnection(config('image-tools.queue_connection'));
         $this->onQueue(config('image-tools.queue_name'));
@@ -33,16 +34,22 @@ class GenerateImageJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(): void
     {
-        app('image-tools')->generate($this->path, $this->manifest);
+        $imageTools = app('image-tools');
+
+        if ($this->sourceDisk !== null && $this->sourceDisk !== '') {
+            $imageTools = $imageTools->disk($this->sourceDisk);
+        }
+
+        $imageTools->generate($this->path, $this->manifest);
     }
 
     /**
-     * Unique by the canonical seed: the same derivative is never queued twice
-     * while a prior job for it is still pending.
+     * Unique by the canonical seed (path + source disk): the same derivative is
+     * never queued twice while a prior job for it is still pending.
      */
     public function uniqueId(): string
     {
-        return $this->path;
+        return ($this->sourceDisk ?? '') . ':' . $this->path;
     }
 
     /**
