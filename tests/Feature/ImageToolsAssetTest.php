@@ -72,4 +72,25 @@ class ImageToolsAssetTest extends TestCase
         Storage::disk('public')->assertExists($storedPath);
         $this->assertStringContainsString($storedPath, $url);
     }
+
+    public function test_asset_ignores_query_params_outside_the_schema(): void
+    {
+        $manifestFile = base_path('bootstrap/cache/image-tools.php');
+        if (File::exists($manifestFile)) {
+            File::delete($manifestFile);
+        }
+
+        File::ensureDirectoryExists(base_path('public/images'));
+        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        File::put(base_path('public/images/schema.png'), $png);
+        ImageToolsFacade::loadManifest();
+
+        // An unknown key ('foo') is not part of the supported schema and must be
+        // ignored: the read key in asset() and the write key in generate() must agree.
+        $clean = ImageToolsFacade::asset('public/images/schema.png?w=16');
+        $withUnknown = ImageToolsFacade::asset('public/images/schema.png?w=16&foo=bar');
+
+        $this->assertNotEmpty($withUnknown);
+        $this->assertSame($clean, $withUnknown, 'Unknown query params must not change the resolved asset URL.');
+    }
 }

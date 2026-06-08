@@ -12,6 +12,8 @@ use Illuminate\Validation\Rule;
 use Spatie\Image\Enums\Fit;
 use Spatie\Image\Image;
 
+use function array_flip;
+use function array_intersect_key;
 use function array_pad;
 use function base_path;
 use function config;
@@ -37,6 +39,13 @@ use function substr;
  */
 class ImageTools
 {
+    /**
+     * Query keys that define a transform. Anything outside this set is ignored,
+     * so the same key is used both when reading (asset) and writing (generate)
+     * a manifest entry — see getPathSeed().
+     */
+    protected const OPTION_KEYS = ['w', 'h', 'q', 'fit', 'format'];
+
     protected array $manifests = ['default' => []];
 
     protected string $manifestPath;
@@ -176,14 +185,10 @@ class ImageTools
             $extension = $validatedOptions['format'];
         }
 
-        // Build a deterministic name seed from the sorted options to keep filenames stable.
-        ksort($validatedOptions);
-
-        if (! empty($validatedOptions)) {
-            $nameSeed = $filepath . '?' . http_build_query($validatedOptions);
-        } else {
-            $nameSeed = $filepath;
-        }
+        // Build a deterministic name seed using the exact same canonicalization
+        // that asset() uses to look the entry up, so the write key always matches
+        // the read key.
+        $nameSeed = $this->getPathSeed($path);
 
         $fileName = \sprintf(
             '%s--%s.%s',
@@ -245,14 +250,20 @@ class ImageTools
     }
 
     /**
-     * Return a canonical "seed" for a path by sorting its query parameters.
-     * This ensures that different parameter orders produce the same key.
+     * Return a canonical "seed" for a path.
+     * Query params are restricted to the supported schema (OPTION_KEYS) and
+     * sorted, so different parameter orders — and unknown extra keys — produce
+     * the same key. This is the single source of truth for both the manifest
+     * lookup in asset() and the manifest/filename key in generate().
      */
     protected function getPathSeed(string $path): string
     {
         // Split original input into "filepath" and "param string".
         [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
         parse_str($params, $options);
+
+        // Keep only supported transform keys; drop anything outside the schema.
+        $options = array_intersect_key($options, array_flip(self::OPTION_KEYS));
 
         // Sort query keys to normalize the seed.
         ksort($options);
