@@ -7,6 +7,7 @@ namespace Isapp\ImageTools\Facades;
 use Illuminate\Support\Facades\Facade;
 
 /**
+ * @method static \Isapp\ImageTools\ImageTools disk(string $disk)
  * @method static void generate(string $path, string $manifest = 'default')
  * @method static string asset(string $path, string $manifest = 'default')
  */

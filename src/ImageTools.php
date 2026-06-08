@@ -21,14 +21,18 @@ use function base_path;
 use function basename;
 use function config;
 use function explode;
+use function fclose;
 use function filter_var;
+use function fopen;
 use function http_build_query;
 use function ksort;
 use function parse_str;
 use function pathinfo;
 use function sha1;
 use function storage_path;
+use function stream_copy_to_stream;
 use function substr;
+use function uniqid;
 
 /**
  * ImageTools: deterministic, query‑driven image generator (vite‑imagetools‑like).
@@ -40,6 +44,10 @@ use function substr;
  * Key ideas:
  *  - The query string defines simple transforms (w, h, fit, q, format).
  *  - A canonical "seed" (sorted query) ensures deterministic filenames and manifest keys.
+ *  - By default the source file is read locally (relative to base_path()). Call
+ *    disk() to read the original from a Laravel filesystem disk instead, e.g.
+ *    ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200'). The source disk
+ *    participates in the seed so the same path from different disks never collides.
  */
 class ImageTools
 {
@@ -54,11 +62,30 @@ class ImageTools
 
     protected string $manifestPath;
 
+    /**
+     * Laravel disk the source image is read from. null = local filesystem
+     * (relative to base_path). Set via disk(); folded into the canonical seed.
+     */
+    protected ?string $sourceDisk = null;
+
     public function __construct()
     {
         // Resolve manifest path from config and preload the default manifest (if present).
         $this->manifestPath = base_path(config('image-tools.manifest_path'));
         $this->loadManifest();
+    }
+
+    /**
+     * Return a copy scoped to read source images from the given Laravel disk.
+     * Mirrors Storage::disk(): ImageTools::disk('s3')->asset('assets/hero.jpg?w=800').
+     * The original is streamed to a temporary local file for processing.
+     */
+    public function disk(string $disk): static
+    {
+        $clone = clone $this;
+        $clone->sourceDisk = $disk;
+
+        return $clone;
     }
 
     /**
@@ -112,14 +139,14 @@ class ImageTools
             // push generation onto the queue and return the final, deterministic
             // URL immediately. The file appears once the worker finishes.
             if ($this->shouldQueue($path)) {
-                $this->dispatchGeneration($pathSeed, $manifest);
+                $this->dispatchGeneration($path, $manifest);
 
-                $info = $this->storedFileInfo($pathSeed);
+                $info = $this->storedFileInfo($path);
 
                 return Storage::disk($info['disk'])->url($info['path']);
             }
 
-            $info = $this->generate($pathSeed, $manifest);
+            $info = $this->generate($path, $manifest);
 
             if ($info === null) {
                 return '';
@@ -153,15 +180,6 @@ class ImageTools
         [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
         parse_str($params, $options);
 
-        // Resolve absolute path to the source file within the project.
-        $fullPath = base_path($filepath);
-
-        // Bail out early if the source file is missing.
-        if (! File::exists($fullPath)) {
-            // TODO: throw exception
-            return null;
-        }
-
         // Validate supported query options. 'w' and 'h' are required together when 'fit' is used.
         $validatedOptions = Validator::validate($options, [
             'w' => ['required_with:fit', 'integer', 'min:1'],
@@ -171,57 +189,84 @@ class ImageTools
             'format' => ['nullable', Rule::in(['jpeg', 'png', 'gif', 'webp', 'avif'])],
         ]);
 
-        // Load the image using Spatie Image.
-        $image = new Image($fullPath);
-
-        // Apply geometry:
-        // - if 'fit' is provided: resize to exactly w x h using the chosen Fit mode
-        // - else if only 'w' or only 'h' is present: resize proportionally by that side
-        // Cast to int to satisfy the image driver type hints.
-        if (! empty($validatedOptions['fit'])) {
-            $fit = Fit::from($validatedOptions['fit']);
-            $image->fit($fit, (int) $validatedOptions['w'], (int) $validatedOptions['h']);
-        } elseif (! empty($validatedOptions['w'])) {
-            $image->width((int) $validatedOptions['w']);
-        } elseif (! empty($validatedOptions['h'])) {
-            $image->height((int) $validatedOptions['h']);
-        }
-        // Apply output quality (1..100).
-        if (! empty($validatedOptions['q'])) {
-            $image->quality((int) $validatedOptions['q']);
-        }
-
-        // Resolve the deterministic destination (path + disk). The same method
-        // backs the pre-computed URL returned by asset() in queued mode, so the
-        // file written here is exactly the one asset() points to.
-        $savePath = $this->storedFileInfo($path)['path'];
-        $fileName = basename($savePath);
-        $tmpPath = storage_path($savePath);
-
-        // Ensure temporary directory exists before saving.
-        File::ensureDirectoryExists(\dirname($tmpPath));
-
-        // Save to a temporary path (optimize() is a no-op if optimizers are not installed).
-        $image->optimize()->save($tmpPath);
-
-        $file = new \Illuminate\Http\File($tmpPath);
-
-        // Move the temp file to the target filesystem disk under a stable name.
-        $stored = Storage::disk($disk)->putFileAs('image-tools', $file, $fileName);
-        File::delete($tmpPath);
-
-        // If storing failed, abort without updating the manifest.
-        if (! $stored) {
-            return null;
+        // Resolve the source to a local, readable path. When a source disk is set
+        // (via disk()), stream the original to a temporary local file because
+        // spatie/image only loads local paths; otherwise read from base_path().
+        $tempSource = null;
+        if ($this->sourceDisk !== null && $this->sourceDisk !== '') {
+            $storage = Storage::disk($this->sourceDisk);
+            if (! $storage->exists($filepath)) {
+                // TODO: throw exception
+                return null;
+            }
+            $tempSource = $this->copySourceToTemp($storage, $filepath);
+            $fullPath = $tempSource;
+        } else {
+            $fullPath = base_path($filepath);
+            if (! File::exists($fullPath)) {
+                // TODO: throw exception
+                return null;
+            }
         }
 
-        // Record the canonical seed -> stored path mapping in the manifest.
-        $this->updateManifest($this->getPathSeed($path), $savePath, $disk, $manifest);
+        try {
+            // Load the image using Spatie Image.
+            $image = new Image($fullPath);
 
-        return [
-            'path' => $savePath,
-            'disk' => $disk,
-        ];
+            // Apply geometry:
+            // - if 'fit' is provided: resize to exactly w x h using the chosen Fit mode
+            // - else if only 'w' or only 'h' is present: resize proportionally by that side
+            // Cast to int to satisfy the image driver type hints.
+            if (! empty($validatedOptions['fit'])) {
+                $fit = Fit::from($validatedOptions['fit']);
+                $image->fit($fit, (int) $validatedOptions['w'], (int) $validatedOptions['h']);
+            } elseif (! empty($validatedOptions['w'])) {
+                $image->width((int) $validatedOptions['w']);
+            } elseif (! empty($validatedOptions['h'])) {
+                $image->height((int) $validatedOptions['h']);
+            }
+            // Apply output quality (1..100).
+            if (! empty($validatedOptions['q'])) {
+                $image->quality((int) $validatedOptions['q']);
+            }
+
+            // Resolve the deterministic destination (path + disk). The same method
+            // backs the pre-computed URL returned by asset() in queued mode, so the
+            // file written here is exactly the one asset() points to.
+            $savePath = $this->storedFileInfo($path)['path'];
+            $fileName = basename($savePath);
+            $tmpPath = storage_path($savePath);
+
+            // Ensure temporary directory exists before saving.
+            File::ensureDirectoryExists(\dirname($tmpPath));
+
+            // Save to a temporary path (optimize() is a no-op if optimizers are not installed).
+            $image->optimize()->save($tmpPath);
+
+            $file = new \Illuminate\Http\File($tmpPath);
+
+            // Move the temp file to the target filesystem disk under a stable name.
+            $stored = Storage::disk($disk)->putFileAs('image-tools', $file, $fileName);
+            File::delete($tmpPath);
+
+            // If storing failed, abort without updating the manifest.
+            if (! $stored) {
+                return null;
+            }
+
+            // Record the canonical seed -> stored path mapping in the manifest.
+            $this->updateManifest($this->getPathSeed($path), $savePath, $disk, $manifest);
+
+            return [
+                'path' => $savePath,
+                'disk' => $disk,
+            ];
+        } finally {
+            // Always remove the temporary copy of a disk-sourced original.
+            if ($tempSource !== null) {
+                File::delete($tempSource);
+            }
+        }
     }
 
     /**
@@ -251,8 +296,10 @@ class ImageTools
      * Return a canonical "seed" for a path.
      * Query params are restricted to the supported schema (OPTION_KEYS) and
      * sorted, so different parameter orders — and unknown extra keys — produce
-     * the same key. This is the single source of truth for both the manifest
-     * lookup in asset() and the manifest/filename key in generate().
+     * the same key. When a source disk is set it is folded into the seed so the
+     * same path read from different disks never collides. This is the single
+     * source of truth for both the manifest lookup in asset() and the
+     * manifest/filename key in generate().
      */
     protected function getPathSeed(string $path): string
     {
@@ -266,11 +313,15 @@ class ImageTools
         // Sort query keys to normalize the seed.
         ksort($options);
 
-        if (empty($options)) {
-            return $filepath;
+        $seed = empty($options) ? $filepath : $filepath . '?' . http_build_query($options);
+
+        // Fold the source disk into the identity (used only as a key/hash input,
+        // never parsed back as a path).
+        if ($this->sourceDisk !== null && $this->sourceDisk !== '') {
+            return $this->sourceDisk . ':' . $seed;
         }
 
-        return $filepath . '?' . http_build_query($options);
+        return $seed;
     }
 
     /**
@@ -324,11 +375,33 @@ class ImageTools
     }
 
     /**
-     * Dispatch a queued job that generates the derivative for the given
-     * (already canonicalized) seed.
+     * Dispatch a queued job that generates the derivative for the given path.
+     * The source disk is carried along so the worker reads from the same origin.
      */
     protected function dispatchGeneration(string $path, string $manifest): void
     {
-        Bus::dispatch(new GenerateImageJob($path, $manifest));
+        Bus::dispatch(new GenerateImageJob($path, $manifest, $this->sourceDisk));
+    }
+
+    /**
+     * Stream a source image off a Laravel disk into a temporary local file and
+     * return its path. The caller is responsible for deleting it.
+     */
+    protected function copySourceToTemp(\Illuminate\Contracts\Filesystem\Filesystem $storage, string $filepath): string
+    {
+        $extension = pathinfo($filepath, PATHINFO_EXTENSION);
+        $tmpPath = storage_path('image-tools/source-' . sha1($filepath) . '-' . uniqid() . ($extension !== '' ? '.' . $extension : ''));
+
+        File::ensureDirectoryExists(\dirname($tmpPath));
+
+        $source = $storage->readStream($filepath);
+        $target = fopen($tmpPath, 'w');
+        stream_copy_to_stream($source, $target);
+        fclose($target);
+        if (\is_resource($source)) {
+            fclose($source);
+        }
+
+        return $tmpPath;
     }
 }

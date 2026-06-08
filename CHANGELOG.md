@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ## [Unreleased]
 
 ### Added
+- Read the source image from any Laravel filesystem disk via a fluent
+  `ImageTools::disk('s3')->asset('assets/hero.jpg?w=800')`. The original is
+  streamed to a temporary local file for processing; the source disk participates
+  in the canonical identity so the same path from different disks never collides.
 - Deferred (queued) generation via a truthy `queue` query flag — `asset()` returns
   the final, deterministic URL immediately and dispatches a `GenerateImageJob`
   (`ShouldBeUnique`) instead of generating in‑request. New config:

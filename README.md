@@ -150,6 +150,36 @@ Configuration (all optional — see `config/image-tools.php`):
 > Pre-generating with `php artisan imagetools:generate` ignores the `queue` flag
 > and produces the same files, so you can warm everything at build time instead.
 
+## Reading the source from a disk (e.g. S3)
+
+By default the **source** image is read locally, relative to `base_path()`. To
+read the original from a configured Laravel filesystem disk instead — for example
+an S3 bucket — scope the call with `disk()`, mirroring `Storage::disk()`:
+
+```php
+use Isapp\ImageTools\Facades\ImageTools;
+
+// Reads s3://<bucket>/assets/hero.jpg, processes it, writes the result to the
+// configured output disk (image-tools.disk).
+ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200&format=webp');
+```
+
+```blade
+<img src="{{ ImageTools::disk('s3')->asset('assets/hero.jpg?w=800') }}">
+```
+
+- The original is streamed to a temporary local file (the image driver loads from
+  a path), processed, and the temp copy is removed.
+- The **source disk participates in the identity**: the same path read from
+  different disks produces distinct files and manifest keys (no collisions).
+- `disk()` returns a scoped copy — it does not mutate the shared instance.
+- The **output** disk is still `config('image-tools.disk')`; `disk()` only changes
+  where the *source* is read from.
+
+> The scanner command detects plain `ImageTools::asset('…')` calls; the fluent
+> `disk('…')->asset('…')` form is generated on demand (or via the queue), not
+> pre-discovered at build time.
+
 ## Commands
 
 ### Pre‑generate from code (CI‑friendly)
