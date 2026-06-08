@@ -97,11 +97,13 @@ IMAGE_TOOLS_QUEUE_UNIQUE_FOR=3600
 Key options:
 
 - **`disk`** — Laravel filesystem disk where processed files are written and served from (`public`, `s3`, `r2`, …).
-- **`manifest_path`** — Path to the PHP manifest file that stores the mapping.
+- **`manifest_path`** — Path to the PHP manifest file that stores the mapping (relative paths resolve from the project base path).
 - **`blade_paths`** — Directories with Blade templates to scan for usages.
 - **`php_paths`** — Additional PHP directories to scan (controllers, services, etc.).
 
 > The request is **canonicalized**: query keys are sorted before hashing, so `?h=630&w=1200` equals `?w=1200&h=630`.
+
+> **Zero‑downtime deploys (Forge, Envoyer, Deployer, Vapor):** the manifest is written at runtime when `asset()` generates an image on demand. `bootstrap/cache` is **per‑release**, so those entries are lost on the next deploy (the images are simply regenerated). If you rely on on‑demand generation, point the manifest at the **shared** `storage` directory, e.g. `IMAGE_TOOLS_MANIFEST_PATH=storage/app/image-tools.php`. If you only pre‑generate at build time with `imagetools:generate`, the default is fine.
 
 ### Query options
 
