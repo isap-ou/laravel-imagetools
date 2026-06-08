@@ -66,4 +66,29 @@ return [
             array_map('trim', explode(',', (string) env('IMAGE_TOOLS_PHP_PATHS', '')))
         ),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Queued Generation
+    |--------------------------------------------------------------------------
+    |
+    | When an ImageTools::asset() call includes a truthy "queue" query flag
+    | (e.g. 'hero.jpg?w=1200&queue=1') and the image has not been generated
+    | yet, the derivative is produced in a queued job instead of synchronously.
+    | asset() returns the final (deterministic) URL immediately; the file
+    | appears once the worker finishes. Handy for pages with many images.
+    |
+    | - queue_connection: connection to dispatch the job on. Falls back to the
+    |                     app's default queue connection (QUEUE_CONNECTION).
+    | - queue_name:       queue to dispatch the job on (defaults to 'default').
+    | - unique_for:       seconds the job stays "unique" to avoid duplicate
+    |                     dispatches for the same image across requests.
+    |                     Requires a cache store with atomic locks
+    |                     (file, redis, database, memcached, …).
+    */
+    'queue_connection' => env('IMAGE_TOOLS_QUEUE_CONNECTION', env('QUEUE_CONNECTION')),
+
+    'queue_name' => env('IMAGE_TOOLS_QUEUE_NAME', 'default'),
+
+    'unique_for' => (int) env('IMAGE_TOOLS_QUEUE_UNIQUE_FOR', 3600),
 ];
