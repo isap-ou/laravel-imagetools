@@ -200,6 +200,29 @@ php artisan imagetools:clear
 - **`fit` requires `w` and `h`** — when using `fit`, provide both dimensions.
 - **No URL / 404** — check the configured `disk` has a URL generator (`php artisan storage:link` for `public` disk).
 
+## Testing
+
+```bash
+composer test
+```
+
+The suite includes an **S3 integration test** (PHPUnit group `s3`) that runs
+against a real S3‑compatible endpoint to verify uploads, URL generation and the
+clear command. It is **skipped** unless `AWS_ENDPOINT` + `AWS_BUCKET` are set, so
+the default run needs no infrastructure. To run it locally against MinIO:
+
+```bash
+docker run -d -p 9000:9000 -e MINIO_ROOT_USER=minio \
+  -e MINIO_ROOT_PASSWORD=minio12345 minio/minio server /data
+aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://test   # create the bucket
+
+AWS_ENDPOINT=http://127.0.0.1:9000 AWS_BUCKET=test \
+  AWS_ACCESS_KEY_ID=minio AWS_SECRET_ACCESS_KEY=minio12345 \
+  AWS_USE_PATH_STYLE_ENDPOINT=true vendor/bin/phpunit --group s3
+```
+
+CI runs this automatically in a dedicated MinIO job.
+
 ## Versioning
 
 This package follows **SemVer**. Until `1.0.0`, minor versions (`0.x`) may include breaking changes.
