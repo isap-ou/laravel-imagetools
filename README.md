@@ -5,6 +5,7 @@ Deterministic, query‑driven image generation for Laravel — inspired by **vit
 <p><a href="https://isapp.be/laravel-imagetools" target="_blank"><img src="https://static.isap.me/laravel-imagetools.png" alt="Laravel Image Tools by ISAPP" /></a></p>
 
 [![Packagist](https://img.shields.io/packagist/v/isapp/laravel-imagetools.svg)](https://packagist.org/packages/isapp/laravel-imagetools)
+[![Tests](https://github.com/isap-ou/laravel-imagetools/actions/workflows/run-tests.yml/badge.svg)](https://github.com/isap-ou/laravel-imagetools/actions/workflows/run-tests.yml)
 [![PHP](https://img.shields.io/packagist/php-v/isapp/laravel-imagetools.svg)](https://packagist.org/packages/isapp/laravel-imagetools)
 [![License](https://img.shields.io/github/license/isap-ou/laravel-imagetools.svg)](#license)
 

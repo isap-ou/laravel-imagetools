@@ -91,4 +91,18 @@ class ImageToolsQueueTest extends TestCase
         $this->assertArrayHasKey('public/images/queue.png?w=16', $manifest);
         Storage::disk('public')->assertExists($manifest['public/images/queue.png?w=16']['path']);
     }
+
+    public function test_dispatched_job_uses_configured_connection_and_queue(): void
+    {
+        config()->set('image-tools.queue_connection', 'redis');
+        config()->set('image-tools.queue_name', 'images');
+        Bus::fake();
+
+        ImageToolsFacade::asset('public/images/queue.png?w=16&queue=1');
+
+        Bus::assertDispatched(
+            GenerateImageJob::class,
+            fn (GenerateImageJob $job) => $job->connection === 'redis' && $job->queue === 'images'
+        );
+    }
 }

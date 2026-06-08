@@ -93,4 +93,9 @@ class ImageToolsAssetTest extends TestCase
         $this->assertNotEmpty($withUnknown);
         $this->assertSame($clean, $withUnknown, 'Unknown query params must not change the resolved asset URL.');
     }
+
+    public function test_asset_returns_empty_string_for_unknown_manifest_namespace(): void
+    {
+        $this->assertSame('', ImageToolsFacade::asset('public/images/x.png?w=10', 'does-not-exist'));
+    }
 }
