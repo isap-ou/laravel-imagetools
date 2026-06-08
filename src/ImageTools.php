@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Isapp\ImageTools;
 
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use Isapp\ImageTools\Jobs\GenerateImageJob;
 use Spatie\Image\Enums\Fit;
 use Spatie\Image\Image;
 
@@ -16,8 +18,10 @@ use function array_flip;
 use function array_intersect_key;
 use function array_pad;
 use function base_path;
+use function basename;
 use function config;
 use function explode;
+use function filter_var;
 use function http_build_query;
 use function ksort;
 use function parse_str;
@@ -104,6 +108,17 @@ class ImageTools
 
         // If not yet generated, create the derivative and refresh manifest cache.
         if (! \array_key_exists($pathSeed, $manifestData)) {
+            // Deferred mode: when the request opts in via a truthy "queue" flag,
+            // push generation onto the queue and return the final, deterministic
+            // URL immediately. The file appears once the worker finishes.
+            if ($this->shouldQueue($path)) {
+                $this->dispatchGeneration($pathSeed, $manifest);
+
+                $info = $this->storedFileInfo($pathSeed);
+
+                return Storage::disk($info['disk'])->url($info['path']);
+            }
+
             $info = $this->generate($pathSeed, $manifest);
 
             if ($info === null) {
@@ -159,9 +174,6 @@ class ImageTools
         // Load the image using Spatie Image.
         $image = new Image($fullPath);
 
-        // Extract filename/extension for defaulting and for output naming.
-        $pathInfo = pathinfo($filepath);
-
         // Apply geometry:
         // - if 'fit' is provided: resize to exactly w x h using the chosen Fit mode
         // - else if only 'w' or only 'h' is present: resize proportionally by that side
@@ -179,25 +191,11 @@ class ImageTools
             $image->quality((int) $validatedOptions['q']);
         }
 
-        // Decide output extension: overridden by 'format', else source extension.
-        $extension = $pathInfo['extension'];
-        if (! empty($validatedOptions['format'])) {
-            $extension = $validatedOptions['format'];
-        }
-
-        // Build a deterministic name seed using the exact same canonicalization
-        // that asset() uses to look the entry up, so the write key always matches
-        // the read key.
-        $nameSeed = $this->getPathSeed($path);
-
-        $fileName = \sprintf(
-            '%s--%s.%s',
-            str($pathInfo['filename'])->slug('-')->toString(),
-            substr(sha1($nameSeed), 0, 10),
-            $extension
-        );
-
-        $savePath = 'image-tools/' . $fileName;
+        // Resolve the deterministic destination (path + disk). The same method
+        // backs the pre-computed URL returned by asset() in queued mode, so the
+        // file written here is exactly the one asset() points to.
+        $savePath = $this->storedFileInfo($path)['path'];
+        $fileName = basename($savePath);
         $tmpPath = storage_path($savePath);
 
         // Ensure temporary directory exists before saving.
@@ -218,7 +216,7 @@ class ImageTools
         }
 
         // Record the canonical seed -> stored path mapping in the manifest.
-        $this->updateManifest($nameSeed, $savePath, $disk, $manifest);
+        $this->updateManifest($this->getPathSeed($path), $savePath, $disk, $manifest);
 
         return [
             'path' => $savePath,
@@ -273,5 +271,64 @@ class ImageTools
         }
 
         return $filepath . '?' . http_build_query($options);
+    }
+
+    /**
+     * Resolve the deterministic storage destination for a "path?query".
+     * Computed purely from the canonical seed — no image is loaded — so it is
+     * safe to call before generation (e.g. to return a URL while the real file
+     * is still being produced in the queue).
+     *
+     * @return array{path: string, disk: string}
+     */
+    protected function storedFileInfo(string $path): array
+    {
+        [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
+        parse_str($params, $options);
+
+        // Schema keys only — must mirror getPathSeed() and the validation rules.
+        $options = array_intersect_key($options, array_flip(self::OPTION_KEYS));
+
+        $pathInfo = pathinfo($filepath);
+
+        // Output extension: overridden by 'format', else the source extension.
+        $extension = ! empty($options['format'])
+            ? $options['format']
+            : ($pathInfo['extension'] ?? '');
+
+        $fileName = \sprintf(
+            '%s--%s.%s',
+            str($pathInfo['filename'])->slug('-')->toString(),
+            substr(sha1($this->getPathSeed($path)), 0, 10),
+            $extension
+        );
+
+        return [
+            'path' => 'image-tools/' . $fileName,
+            'disk' => config('image-tools.disk'),
+        ];
+    }
+
+    /**
+     * Whether the request opts into deferred (queued) generation via a truthy
+     * "queue" query flag, e.g. 'hero.jpg?w=1200&queue=1'. The flag is a control
+     * parameter only: it is excluded from the canonical seed (see OPTION_KEYS),
+     * so it never affects the generated filename or manifest key.
+     */
+    protected function shouldQueue(string $path): bool
+    {
+        [, $params] = array_pad(explode('?', $path, 2), 2, '');
+        parse_str($params, $options);
+
+        return filter_var($options['queue'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /**
+     * Dispatch a queued job that generates the derivative for the given
+     * (already canonicalized) seed.
+     */
+    protected function dispatchGeneration(string $path, string $manifest): void
+    {
+        Bus::dispatch(new GenerateImageJob($path, $manifest));
     }
 }
