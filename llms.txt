@@ -1,0 +1,25 @@
+# Laravel Image Tools
+
+> Deterministic, query‑driven image generation for Laravel (inspired by vite‑imagetools).
+> `ImageTools::asset('img.jpg?w=1200&format=webp')` returns a public URL to a hash‑named
+> derivative written to a configured filesystem disk, recording the `path?query → file`
+> mapping in a PHP manifest so later calls are cheap.
+
+Key ideas: the query string (`w`, `h`, `fit`, `q`, `format`) is canonicalized — reduced to
+those keys and sorted — into a "seed" that yields deterministic filenames and manifest keys.
+Generation runs on demand, ahead of time via a scanner command, or deferred to the queue
+with a `queue` flag. Works with any Laravel disk (public, S3/R2).
+
+## Documentation
+
+- [README](README.md): installation, usage, query options, deferred (queued) generation, configuration, commands, troubleshooting
+- [Changelog](CHANGELOG.md): notable changes and releases
+- [Agent guide](AGENTS.md): setup, commands, layout, conventions, and invariants for contributors
+
+## Source
+
+- [ImageTools](src/ImageTools.php): core — `asset()`, `generate()`, canonical seed, manifest, queued dispatch
+- [GenerateImageJob](src/Jobs/GenerateImageJob.php): queued generation (`ShouldQueue` + `ShouldBeUnique`)
+- [GenerateImagesCommand](src/Commands/GenerateImagesCommand.php): scan Blade/PHP and pre‑generate
+- [ClearGeneratedImagesCommand](src/Commands/ClearGeneratedImagesCommand.php): remove generated files and the manifest
+- [config](config/image-tools.php): disk, manifest path, scan paths, queue settings

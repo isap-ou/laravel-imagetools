@@ -1,3 +1,5 @@
 /.github export-ignore
 /pint.json export-ignore
 /phpunit.xml export-ignore
+/AGENTS.md export-ignore
+/CLAUDE.md export-ignore
