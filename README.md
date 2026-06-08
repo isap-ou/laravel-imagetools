@@ -69,6 +69,13 @@ use Isapp\\ImageTools\\Facades\\ImageTools;
 $url = ImageTools::asset('resource/images/placeholder.jpg?w=640&q=75&format=webp');
 ```
 
+**Source on another disk** — read the original from any Laravel disk (e.g. S3),
+mirroring `Storage::disk()` (see [Reading the source from a disk](#reading-the-source-from-a-disk-eg-s3)):
+
+```php
+ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200&format=webp');
+```
+
 **Also supported** (and detected by the scanner):
 
 ```blade
