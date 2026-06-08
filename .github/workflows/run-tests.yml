@@ -43,4 +43,48 @@ jobs:
           composer update --prefer-dist --prefer-stable --no-interaction
 
       - name: Run tests
-        run: vendor/bin/phpunit --colors=always
+        # The 's3' group needs a live S3 endpoint and runs in the dedicated job below.
+        run: vendor/bin/phpunit --colors=always --exclude-group s3
+
+  s3:
+    runs-on: ubuntu-latest
+    name: S3 integration (MinIO)
+
+    env:
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio12345
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_BUCKET: test
+      AWS_ENDPOINT: http://127.0.0.1:9000
+      AWS_USE_PATH_STYLE_ENDPOINT: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio12345 \
+            minio/minio:latest server /data
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: gd, fileinfo, mbstring
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --prefer-stable --no-interaction
+
+      - name: Wait for MinIO and create bucket
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live; then echo "MinIO ready"; break; fi
+            sleep 2
+          done
+          aws --endpoint-url http://127.0.0.1:9000 s3 mb "s3://${AWS_BUCKET}"
+
+      - name: Run S3 integration tests
+        run: vendor/bin/phpunit --colors=always --group s3
