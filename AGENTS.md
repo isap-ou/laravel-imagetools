@@ -25,8 +25,13 @@ ahead of time (scanner command), or on a queue.
 
 ## Layout
 
-- `src/ImageTools.php` — core: `asset()`, `generate()`, the canonical seed, the manifest,
-  and queued dispatch.
+- `src/ImageTools.php` — the orchestrator (`asset()`, `generate()`, `disk()`, queued
+  dispatch). Depends on three injected collaborators in `src/Support/`:
+  - `Support/Manifest.php` — the PHP manifest state + persistence (load/has/get/put).
+  - `Support/PathResolver.php` — canonical `seed()` and the deterministic `storedFile()`.
+  - `Support/SourceReader.php` — resolves a source to a local path (local or disk→temp).
+  Wiring lives in `src/ServiceProvider.php` (`Manifest` is bound with its config path; the
+  rest auto‑resolve).
 - `src/Jobs/GenerateImageJob.php` — queued generation (`ShouldQueue` + `ShouldBeUnique`).
 - `src/Commands/GenerateImagesCommand.php` — scans Blade/PHP (nikic/php-parser) and
   pre‑generates; `src/Commands/ClearGeneratedImagesCommand.php` — removes generated files
@@ -46,8 +51,8 @@ ahead of time (scanner command), or on a queue.
 
 - The manifest key **and** the generated filename both derive from one canonical "seed":
   the query reduced to the supported keys (`w, h, q, fit, format`), sorted. `asset()`
-  (read path) and `generate()` (write path) MUST use the same derivation — see
-  `getPathSeed()` and `storedFileInfo()`. Divergence causes cache misses and broken URLs.
+  (read path) and `generate()` (write path) MUST use the same derivation — both go through
+  `PathResolver::seed()` / `storedFile()`. Divergence causes cache misses and broken URLs.
 - `queue` is a **control flag**, deliberately excluded from the seed, so it never affects
   the filename or manifest key.
 - The **source disk** (set via `disk()`) is folded into the seed so the same path read from

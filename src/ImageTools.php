@@ -4,35 +4,25 @@ declare(strict_types=1);
 
 namespace Isapp\ImageTools;
 
-use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Isapp\ImageTools\Jobs\GenerateImageJob;
+use Isapp\ImageTools\Support\Manifest;
+use Isapp\ImageTools\Support\PathResolver;
+use Isapp\ImageTools\Support\SourceReader;
 use Spatie\Image\Enums\Fit;
 use Spatie\Image\Image;
 
-use function array_flip;
-use function array_intersect_key;
 use function array_pad;
-use function base_path;
 use function basename;
 use function config;
 use function explode;
-use function fclose;
 use function filter_var;
-use function fopen;
-use function http_build_query;
-use function ksort;
 use function parse_str;
-use function pathinfo;
-use function sha1;
 use function storage_path;
-use function stream_copy_to_stream;
-use function substr;
-use function uniqid;
 
 /**
  * ImageTools: deterministic, query‑driven image generator (vite‑imagetools‑like).
@@ -40,45 +30,29 @@ use function uniqid;
  * Usage:
  *  - ImageTools::asset('path/to/img.jpg?w=1200&h=630&fit=contain&format=webp&q=82')
  *    returns a URL from the configured filesystem disk and records the mapping in a PHP manifest.
+ *  - Call disk() to read the original from a Laravel filesystem disk instead of
+ *    locally, e.g. ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200').
  *
- * Key ideas:
- *  - The query string defines simple transforms (w, h, fit, q, format).
- *  - A canonical "seed" (sorted query) ensures deterministic filenames and manifest keys.
- *  - By default the source file is read locally (relative to base_path()). Call
- *    disk() to read the original from a Laravel filesystem disk instead, e.g.
- *    ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200'). The source disk
- *    participates in the seed so the same path from different disks never collides.
+ * Orchestrates three collaborators: Manifest (state + persistence), PathResolver
+ * (canonical seed + destination) and SourceReader (local/disk source resolution).
  */
 class ImageTools
 {
-    /**
-     * Query keys that define a transform. Anything outside this set is ignored,
-     * so the same key is used both when reading (asset) and writing (generate)
-     * a manifest entry — see getPathSeed().
-     */
-    protected const OPTION_KEYS = ['w', 'h', 'q', 'fit', 'format'];
-
-    protected array $manifests = ['default' => []];
-
-    protected string $manifestPath;
-
     /**
      * Laravel disk the source image is read from. null = local filesystem
      * (relative to base_path). Set via disk(); folded into the canonical seed.
      */
     protected ?string $sourceDisk = null;
 
-    public function __construct()
-    {
-        // Resolve manifest path from config and preload the default manifest (if present).
-        $this->manifestPath = base_path(config('image-tools.manifest_path'));
-        $this->loadManifest();
-    }
+    public function __construct(
+        protected Manifest $manifest,
+        protected PathResolver $paths,
+        protected SourceReader $source,
+    ) {}
 
     /**
      * Return a copy scoped to read source images from the given Laravel disk.
      * Mirrors Storage::disk(): ImageTools::disk('s3')->asset('assets/hero.jpg?w=800').
-     * The original is streamed to a temporary local file for processing.
      */
     public function disk(string $disk): static
     {
@@ -89,99 +63,71 @@ class ImageTools
     }
 
     /**
-     * Load a manifest into memory.
-     * - When $path is provided, load that file (if it exists) under its own key.
-     * - Otherwise, load the default manifest configured by 'image-tools.manifest_path' into 'default'.
+     * Load a manifest into memory (delegates to the Manifest collaborator).
      */
     public function loadManifest(?string $path = null): void
     {
-        // Load an explicit manifest file if a path is provided.
-        if (! empty($path)) {
-            if (File::exists($path)) {
-                $this->manifests[$path] = require $path;
-            }
-
-            return;
-        }
-
-        // Default case: if the default manifest doesn't exist yet, nothing to load.
-        if (! File::exists($this->manifestPath)) {
-            return;
-        }
-
-        // Load the default manifest array.
-        $this->manifests['default'] = require $this->manifestPath;
+        $this->manifest->load($path);
     }
 
     /**
-     * Return a public URL for a given "path?query".
-     * If the canonical key is missing in the manifest, generate the image first and then return its URL.
+     * Return a public URL for a given "path?query". If the canonical key is
+     * missing in the manifest, generate the image first (or queue it) and return
+     * the URL.
      *
      * @param  string  $path  Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
      * @param  string  $manifest  Manifest namespace ('default' by default)
      */
     public function asset(string $path, string $manifest = 'default'): string
     {
-        if (! isset($this->manifests[$manifest])) {
+        if (! $this->manifest->exists($manifest)) {
             // TODO throw exception;
             return '';
         }
 
-        // Snapshot current manifest data for readability.
-        $manifestData = $this->manifests[$manifest];
+        $seed = $this->paths->seed($path, $this->sourceDisk);
 
-        // Canonicalize the query string (sort keys) to get a deterministic key.
-        $pathSeed = $this->getPathSeed($path);
-
-        // If not yet generated, create the derivative and refresh manifest cache.
-        if (! \array_key_exists($pathSeed, $manifestData)) {
+        if (! $this->manifest->has($manifest, $seed)) {
             // Deferred mode: when the request opts in via a truthy "queue" flag,
             // push generation onto the queue and return the final, deterministic
             // URL immediately. The file appears once the worker finishes.
             if ($this->shouldQueue($path)) {
                 $this->dispatchGeneration($path, $manifest);
 
-                $info = $this->storedFileInfo($path);
+                $info = $this->paths->storedFile($path, $this->sourceDisk);
 
                 return Storage::disk($info['disk'])->url($info['path']);
             }
 
-            $info = $this->generate($path, $manifest);
-
-            if ($info === null) {
+            if ($this->generate($path, $manifest) === null) {
                 return '';
             }
-
-            // Refresh local cache after manifest was updated
-            $manifestData = $this->manifests[$manifest];
         }
 
-        $fileInformation = $manifestData[$pathSeed];
+        $file = $this->manifest->get($manifest, $seed);
 
-        // Resolve a URL from the configured disk using the manifest mapping.
-        return Storage::disk($fileInformation['disk'])->url($fileInformation['path']);
+        return Storage::disk($file['disk'])->url($file['path']);
     }
 
     /**
-     * Generate a processed image for the given "path?query" and store it on the configured disk.
-     * Supported options (validated):
+     * Generate a processed image for the given "path?query" and store it on the
+     * configured disk. Supported options (validated):
      *  - w (int), h (int): target dimensions
      *  - fit (Spatie\Image\Enums\Fit): if present, both w and h are required
      *  - q (1..100): quality
      *  - format: one of jpeg, png, gif, webp, avif
      *
-     * Returns an array with ['path' => string, 'disk' => string] or null on failure.
+     * @return array{path: string, disk: string}|null null on missing source or storage failure
      */
     public function generate(string $path, string $manifest = 'default'): ?array
     {
         $disk = config('image-tools.disk');
 
-        // Split into file path and query; if no '?', $params becomes an empty string.
         [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
         parse_str($params, $options);
 
         // Validate supported query options. 'w' and 'h' are required together when 'fit' is used.
-        $validatedOptions = Validator::validate($options, [
+        $validated = Validator::validate($options, [
             'w' => ['required_with:fit', 'integer', 'min:1'],
             'h' => ['required_with:fit', 'integer', 'min:1'],
             'q' => ['max:100', 'min:1', 'integer'],
@@ -189,73 +135,51 @@ class ImageTools
             'format' => ['nullable', Rule::in(['jpeg', 'png', 'gif', 'webp', 'avif'])],
         ]);
 
-        // Resolve the source to a local, readable path. When a source disk is set
-        // (via disk()), stream the original to a temporary local file because
-        // spatie/image only loads local paths; otherwise read from base_path().
-        $tempSource = null;
-        if ($this->sourceDisk !== null && $this->sourceDisk !== '') {
-            $storage = Storage::disk($this->sourceDisk);
-            if (! $storage->exists($filepath)) {
-                // TODO: throw exception
-                return null;
-            }
-            $tempSource = $this->copySourceToTemp($storage, $filepath);
-            $fullPath = $tempSource;
-        } else {
-            $fullPath = base_path($filepath);
-            if (! File::exists($fullPath)) {
-                // TODO: throw exception
-                return null;
-            }
+        // Resolve the source to a local path (a disk source is streamed to a temp file).
+        $source = $this->source->resolve($filepath, $this->sourceDisk);
+        if ($source === null) {
+            // TODO: throw exception
+            return null;
         }
 
         try {
-            // Load the image using Spatie Image.
-            $image = new Image($fullPath);
+            $image = new Image($source['path']);
 
-            // Apply geometry:
-            // - if 'fit' is provided: resize to exactly w x h using the chosen Fit mode
-            // - else if only 'w' or only 'h' is present: resize proportionally by that side
-            // Cast to int to satisfy the image driver type hints.
-            if (! empty($validatedOptions['fit'])) {
-                $fit = Fit::from($validatedOptions['fit']);
-                $image->fit($fit, (int) $validatedOptions['w'], (int) $validatedOptions['h']);
-            } elseif (! empty($validatedOptions['w'])) {
-                $image->width((int) $validatedOptions['w']);
-            } elseif (! empty($validatedOptions['h'])) {
-                $image->height((int) $validatedOptions['h']);
+            // Apply geometry: 'fit' resizes to exactly w x h; otherwise resize by
+            // whichever single side is present. Cast to int for the driver.
+            if (! empty($validated['fit'])) {
+                $image->fit(Fit::from($validated['fit']), (int) $validated['w'], (int) $validated['h']);
+            } elseif (! empty($validated['w'])) {
+                $image->width((int) $validated['w']);
+            } elseif (! empty($validated['h'])) {
+                $image->height((int) $validated['h']);
             }
-            // Apply output quality (1..100).
-            if (! empty($validatedOptions['q'])) {
-                $image->quality((int) $validatedOptions['q']);
+            if (! empty($validated['q'])) {
+                $image->quality((int) $validated['q']);
             }
 
-            // Resolve the deterministic destination (path + disk). The same method
-            // backs the pre-computed URL returned by asset() in queued mode, so the
-            // file written here is exactly the one asset() points to.
-            $savePath = $this->storedFileInfo($path)['path'];
+            // The same destination backs asset()'s pre-computed URL, so the file
+            // written here is exactly the one asset() points to.
+            $savePath = $this->paths->storedFile($path, $this->sourceDisk)['path'];
             $fileName = basename($savePath);
             $tmpPath = storage_path($savePath);
 
-            // Ensure temporary directory exists before saving.
             File::ensureDirectoryExists(\dirname($tmpPath));
 
-            // Save to a temporary path (optimize() is a no-op if optimizers are not installed).
+            // optimize() is a no-op when no optimizer binaries are installed.
             $image->optimize()->save($tmpPath);
 
-            $file = new \Illuminate\Http\File($tmpPath);
-
-            // Move the temp file to the target filesystem disk under a stable name.
-            $stored = Storage::disk($disk)->putFileAs('image-tools', $file, $fileName);
+            $stored = Storage::disk($disk)->putFileAs('image-tools', new \Illuminate\Http\File($tmpPath), $fileName);
             File::delete($tmpPath);
 
-            // If storing failed, abort without updating the manifest.
             if (! $stored) {
                 return null;
             }
 
-            // Record the canonical seed -> stored path mapping in the manifest.
-            $this->updateManifest($this->getPathSeed($path), $savePath, $disk, $manifest);
+            $this->manifest->put($manifest, $this->paths->seed($path, $this->sourceDisk), [
+                'path' => $savePath,
+                'disk' => $disk,
+            ]);
 
             return [
                 'path' => $savePath,
@@ -263,108 +187,16 @@ class ImageTools
             ];
         } finally {
             // Always remove the temporary copy of a disk-sourced original.
-            if ($tempSource !== null) {
-                File::delete($tempSource);
+            if ($source['temporary']) {
+                File::delete($source['path']);
             }
         }
     }
 
     /**
-     * Update the in-memory manifest and write it to disk.
-     * The manifest stores: 'seed' => ['path' => 'image-tools/name.ext', 'disk' => 'public'].
-     * Opcache is invalidated to ensure fresh reads after deployment.
-     */
-    protected function updateManifest(string $path, string $savePath, string $disk, string $manifest): void
-    {
-        $this->manifests[$manifest][$path] = [
-            'path' => $savePath,
-            'disk' => $disk,
-        ];
-
-        $files = app(Filesystem::class);
-
-        $contents = "<?php\n\nreturn " . var_export($this->manifests[$manifest], true) . ";\n";
-
-        $files->replace($this->manifestPath, $contents);
-
-        if (\function_exists('opcache_invalidate')) {
-            @opcache_invalidate($this->manifestPath, true);
-        }
-    }
-
-    /**
-     * Return a canonical "seed" for a path.
-     * Query params are restricted to the supported schema (OPTION_KEYS) and
-     * sorted, so different parameter orders — and unknown extra keys — produce
-     * the same key. When a source disk is set it is folded into the seed so the
-     * same path read from different disks never collides. This is the single
-     * source of truth for both the manifest lookup in asset() and the
-     * manifest/filename key in generate().
-     */
-    protected function getPathSeed(string $path): string
-    {
-        // Split original input into "filepath" and "param string".
-        [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
-        parse_str($params, $options);
-
-        // Keep only supported transform keys; drop anything outside the schema.
-        $options = array_intersect_key($options, array_flip(self::OPTION_KEYS));
-
-        // Sort query keys to normalize the seed.
-        ksort($options);
-
-        $seed = empty($options) ? $filepath : $filepath . '?' . http_build_query($options);
-
-        // Fold the source disk into the identity (used only as a key/hash input,
-        // never parsed back as a path).
-        if ($this->sourceDisk !== null && $this->sourceDisk !== '') {
-            return $this->sourceDisk . ':' . $seed;
-        }
-
-        return $seed;
-    }
-
-    /**
-     * Resolve the deterministic storage destination for a "path?query".
-     * Computed purely from the canonical seed — no image is loaded — so it is
-     * safe to call before generation (e.g. to return a URL while the real file
-     * is still being produced in the queue).
-     *
-     * @return array{path: string, disk: string}
-     */
-    protected function storedFileInfo(string $path): array
-    {
-        [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
-        parse_str($params, $options);
-
-        // Schema keys only — must mirror getPathSeed() and the validation rules.
-        $options = array_intersect_key($options, array_flip(self::OPTION_KEYS));
-
-        $pathInfo = pathinfo($filepath);
-
-        // Output extension: overridden by 'format', else the source extension.
-        $extension = ! empty($options['format'])
-            ? $options['format']
-            : ($pathInfo['extension'] ?? '');
-
-        $fileName = \sprintf(
-            '%s--%s.%s',
-            str($pathInfo['filename'])->slug('-')->toString(),
-            substr(sha1($this->getPathSeed($path)), 0, 10),
-            $extension
-        );
-
-        return [
-            'path' => 'image-tools/' . $fileName,
-            'disk' => config('image-tools.disk'),
-        ];
-    }
-
-    /**
      * Whether the request opts into deferred (queued) generation via a truthy
-     * "queue" query flag, e.g. 'hero.jpg?w=1200&queue=1'. The flag is a control
-     * parameter only: it is excluded from the canonical seed (see OPTION_KEYS),
-     * so it never affects the generated filename or manifest key.
+     * "queue" query flag, e.g. 'hero.jpg?w=1200&queue=1'. A control flag only:
+     * it is excluded from the seed, so it never affects the filename or key.
      */
     protected function shouldQueue(string $path): bool
     {
@@ -381,27 +213,5 @@ class ImageTools
     protected function dispatchGeneration(string $path, string $manifest): void
     {
         Bus::dispatch(new GenerateImageJob($path, $manifest, $this->sourceDisk));
-    }
-
-    /**
-     * Stream a source image off a Laravel disk into a temporary local file and
-     * return its path. The caller is responsible for deleting it.
-     */
-    protected function copySourceToTemp(\Illuminate\Contracts\Filesystem\Filesystem $storage, string $filepath): string
-    {
-        $extension = pathinfo($filepath, PATHINFO_EXTENSION);
-        $tmpPath = storage_path('image-tools/source-' . sha1($filepath) . '-' . uniqid() . ($extension !== '' ? '.' . $extension : ''));
-
-        File::ensureDirectoryExists(\dirname($tmpPath));
-
-        $source = $storage->readStream($filepath);
-        $target = fopen($tmpPath, 'w');
-        stream_copy_to_stream($source, $target);
-        fclose($target);
-        if (\is_resource($source)) {
-            fclose($source);
-        }
-
-        return $tmpPath;
     }
 }
