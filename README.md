@@ -225,7 +225,8 @@ CI runs this automatically in a dedicated MinIO job.
 
 ## Versioning
 
-This package follows **SemVer**. Until `1.0.0`, minor versions (`0.x`) may include breaking changes.
+This package follows [Semantic Versioning](https://semver.org). See
+[CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Security
 
