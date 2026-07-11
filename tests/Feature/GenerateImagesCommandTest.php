@@ -76,6 +76,27 @@ class GenerateImagesCommandTest extends TestCase
         $this->assertArrayHasKey('public/images/scan.png?w=12', $this->manifest());
     }
 
+    public function test_it_scans_disk_chained_calls_and_generates_from_that_disk(): void
+    {
+        // Source lives ONLY on the 's3' disk; the derivative is written to 'public'.
+        Storage::fake('s3');
+        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        Storage::disk('s3')->put('assets/scan.png', $png);
+
+        Config::set('image-tools.blade_paths', [$this->bladeDir]);
+        File::ensureDirectoryExists(base_path($this->bladeDir));
+        File::put(
+            base_path($this->bladeDir . '/page.blade.php'),
+            "{{ ImageTools::disk('s3')->asset('assets/scan.png?w=8') }}"
+        );
+
+        $this->artisan('imagetools:generate')->assertSuccessful();
+
+        $manifest = $this->manifest();
+        $this->assertArrayHasKey('s3:assets/scan.png?w=8', $manifest);
+        Storage::disk('public')->assertExists($manifest['s3:assets/scan.png?w=8']['path']);
+    }
+
     public function test_it_clears_existing_output_before_regenerating(): void
     {
         // Pre-seed a stale manifest entry + file; the command calls clear first.
