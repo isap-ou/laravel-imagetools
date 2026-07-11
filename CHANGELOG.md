@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-11
+
+### Added
+- `imagetools:generate` now pre-generates images requested from a Laravel
+  filesystem disk via `ImageTools::disk('s3')->asset('assets/hero.jpg?w=800')`.
+  The scanner detects a literal `disk('x')` hop before `asset()` (facade, `app()`
+  and `App::make()` accessors) and carries the source disk through to generation;
+  wanted entries are de‑duplicated by their canonical seed. Only explicit, literal
+  image paths are pre‑generated — dynamic arguments and non‑literal `disk($var)`
+  hops are skipped by design. ([#12])
+
 ## [1.1.0] — 2026-06-09
 
 ### Added
@@ -47,7 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ## [1.0.0] — 2025-11-05
 - Initial release.
 
-[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.1.0...main
+[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.2.0...main
+[1.2.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.2.0
 [1.1.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.1.0
 [1.0.3]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.0.3
 [1.0.2]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.0.2
@@ -61,3 +73,4 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 [#7]: https://github.com/isap-ou/laravel-imagetools/pull/7
 [#8]: https://github.com/isap-ou/laravel-imagetools/pull/8
 [#9]: https://github.com/isap-ou/laravel-imagetools/pull/9
+[#12]: https://github.com/isap-ou/laravel-imagetools/pull/12
