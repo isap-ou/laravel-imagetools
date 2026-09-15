@@ -170,6 +170,31 @@ class ImageToolsGenerateTest extends TestCase
         $this->assertSame('true', $it->seenOption);
     }
 
+    public function test_the_stored_file_really_is_a_lossless_webp_under_imagick(): void
+    {
+        if (! \extension_loaded('imagick')) {
+            $this->markTestSkipped('The lossless switch is an Imagick option; GD has none.');
+        }
+
+        $it = app(ImageTools::class);
+
+        $lossless = $it->generate('public/images/onepx.png?format=webp&lossless=1');
+        $lossy = $it->generate('public/images/onepx.png?format=webp');
+
+        $losslessBytes = Storage::disk('public')->get($lossless['path']);
+        $lossyBytes = Storage::disk('public')->get($lossy['path']);
+
+        // A WebP file names its coding in the chunk after the RIFF header:
+        // 'VP8L' is the lossless bitstream, 'VP8 ' the lossy one. Read the
+        // header only — the byte sequence could occur in compressed data.
+        $this->assertSame('RIFF', substr($losslessBytes, 0, 4));
+        $this->assertSame('WEBP', substr($losslessBytes, 8, 4));
+        $this->assertStringContainsString('VP8L', substr($losslessBytes, 0, 64));
+
+        // The switch must actually change what is written, not only what is set.
+        $this->assertStringNotContainsString('VP8L', substr($lossyBytes, 0, 64));
+    }
+
     public function test_manifest_entry_records_the_source_it_was_built_from(): void
     {
         $it = app(ImageTools::class);
