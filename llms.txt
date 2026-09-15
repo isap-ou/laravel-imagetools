@@ -22,4 +22,5 @@ with a `queue` flag. Works with any Laravel disk (public, S3/R2).
 - [GenerateImageJob](src/Jobs/GenerateImageJob.php): queued generation (`ShouldQueue` + `ShouldBeUnique`)
 - [GenerateImagesCommand](src/Commands/GenerateImagesCommand.php): scan Blade/PHP and pre‑generate
 - [ClearGeneratedImagesCommand](src/Commands/ClearGeneratedImagesCommand.php): remove generated files and the manifest
+- [RegenerateImagesCommand](src/Commands/RegenerateImagesCommand.php): rebuild manifest entries whose stored file is missing or empty
 - [config](config/image-tools.php): disk, manifest path, scan paths, queue settings

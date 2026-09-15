@@ -6,6 +6,7 @@ namespace Isapp\ImageTools;
 
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -15,6 +16,9 @@ use Isapp\ImageTools\Support\PathResolver;
 use Isapp\ImageTools\Support\SourceReader;
 use Spatie\Image\Enums\Fit;
 use Spatie\Image\Image;
+use Spatie\ImageOptimizer\OptimizerChain;
+use Spatie\ImageOptimizer\OptimizerChainFactory;
+use Spatie\ImageOptimizer\Optimizers\Cwebp;
 
 use function array_pad;
 use function basename;
@@ -23,6 +27,7 @@ use function explode;
 use function filter_var;
 use function parse_str;
 use function storage_path;
+use function str_ends_with;
 
 /**
  * ImageTools: deterministic, query‑driven image generator (vite‑imagetools‑like).
@@ -116,6 +121,7 @@ class ImageTools
      *  - fit (Spatie\Image\Enums\Fit): if present, both w and h are required
      *  - q (1..100): quality
      *  - format: one of jpeg, png, gif, webp, avif
+     *  - lossless (bool): lossless WebP; see applyLossless() for its two conditions
      *
      * @return array{path: string, disk: string}|null null on missing source or storage failure
      */
@@ -133,6 +139,10 @@ class ImageTools
             'q' => ['max:100', 'min:1', 'integer'],
             'fit' => ['nullable', Rule::enum(Fit::class)],
             'format' => ['nullable', Rule::in(['jpeg', 'png', 'gif', 'webp', 'avif'])],
+            // Accepts every spelling FILTER_VALIDATE_BOOLEAN reads, the way the
+            // 'queue' flag already does. Laravel's 'boolean' rule takes only
+            // 1/0, so 'lossless=true' in a template would raise instead.
+            'lossless' => ['nullable', Rule::in(['0', '1', 'true', 'false', 'on', 'off', 'yes', 'no'])],
         ]);
 
         // Resolve the source to a local path (a disk source is streamed to a temp file).
@@ -166,8 +176,24 @@ class ImageTools
 
             File::ensureDirectoryExists(\dirname($tmpPath));
 
-            // optimize() is a no-op when no optimizer binaries are installed.
-            $image->optimize()->save($tmpPath);
+            $chain = $this->applyLossless($image, $savePath, $validated['lossless'] ?? false);
+
+            $this->writeDerivative($image, $tmpPath, $chain);
+
+            // An optimizer that is killed mid-run (a timeout on a large source)
+            // leaves the file it was rewriting in place empty. Uploading that byte
+            // count would make the manifest point at a permanently broken image,
+            // so the encode counts as a failure instead.
+            if (! File::exists($tmpPath) || File::size($tmpPath) === 0) {
+                File::delete($tmpPath);
+
+                Log::warning('ImageTools: the encode produced an empty file; nothing was stored.', [
+                    'path' => $path,
+                    'disk' => $this->sourceDisk,
+                ]);
+
+                return null;
+            }
 
             $stored = Storage::disk($disk)->putFileAs('image-tools', new \Illuminate\Http\File($tmpPath), $fileName);
             File::delete($tmpPath);
@@ -176,9 +202,14 @@ class ImageTools
                 return null;
             }
 
+            // The source is recorded next to the output so a later pass — see the
+            // imagetools:regenerate command — can rebuild this exact derivative
+            // without re-deriving anything from the key.
             $this->manifest->put($manifest, $this->paths->seed($path, $this->sourceDisk), [
                 'path' => $savePath,
                 'disk' => $disk,
+                'source' => $path,
+                'source_disk' => $this->sourceDisk,
             ]);
 
             return [
@@ -191,6 +222,51 @@ class ImageTools
                 File::delete($source['path']);
             }
         }
+    }
+
+    /**
+     * Switch the image to lossless WebP and return the optimizer chain that keeps
+     * it lossless. Two conditions must hold: the output is a WebP, and the driver
+     * is Imagick — the switch is an Imagick option and GD has no equivalent. When
+     * either fails, the ordinary encode runs and null is returned.
+     *
+     * The chain matters as much as the option: the default chain re-encodes every
+     * WebP with a lossy cwebp call, which would undo the lossless write.
+     */
+    protected function applyLossless(Image $image, string $savePath, mixed $lossless): ?OptimizerChain
+    {
+        if (! filter_var($lossless, FILTER_VALIDATE_BOOLEAN)) {
+            return null;
+        }
+
+        if (! str_ends_with($savePath, '.webp') || $image->driverName() !== 'imagick') {
+            return null;
+        }
+
+        $image->image()->setOption('webp:lossless', 'true');
+
+        return $this->losslessOptimizerChain();
+    }
+
+    /**
+     * A cwebp-only chain that re-encodes losslessly. Only cwebp handles WebP in
+     * the default chain, so dropping the other optimizers costs nothing here.
+     */
+    protected function losslessOptimizerChain(): OptimizerChain
+    {
+        return OptimizerChainFactory::create([
+            Cwebp::class => ['-lossless', '-m 6', '-mt'],
+        ]);
+    }
+
+    /**
+     * Encode the prepared image to a local temporary path. optimize() is a no-op
+     * when no optimizer binaries are installed; a chain is passed only when the
+     * request needs options the default chain does not carry.
+     */
+    protected function writeDerivative(Image $image, string $tmpPath, ?OptimizerChain $chain = null): void
+    {
+        $image->optimize($chain)->save($tmpPath);
     }
 
     /**

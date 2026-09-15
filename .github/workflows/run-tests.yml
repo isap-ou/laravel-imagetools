@@ -46,6 +46,33 @@ jobs:
         # The 's3' group needs a live S3 endpoint and runs in the dedicated job below.
         run: vendor/bin/phpunit --colors=always --exclude-group s3
 
+  imagick:
+    runs-on: ubuntu-latest
+    name: Imagick driver
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          # spatie/image prefers Imagick when the extension is present, so this job
+          # runs the suite on the second driver. The lossless WebP switch is an
+          # Imagick option and is only exercised here. cwebp comes from webp.
+          extensions: imagick, gd, fileinfo, mbstring
+          coverage: none
+
+      - name: Install the optimizer binaries
+        run: sudo apt-get update && sudo apt-get install -y webp
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --prefer-stable --no-interaction
+
+      - name: Run tests
+        run: vendor/bin/phpunit --colors=always --exclude-group s3
+
   s3:
     runs-on: ubuntu-latest
     name: S3 integration (MinIO)
@@ -63,10 +90,12 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Start MinIO
+        # The image comes from MinIO's own registry: an anonymous pull of
+        # minio/minio from Docker Hub is denied on the runners.
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio12345 \
-            minio/minio:latest server /data
+            quay.io/minio/minio:latest server /data
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2

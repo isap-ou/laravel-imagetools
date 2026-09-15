@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Isapp\ImageTools\Facades\ImageTools as ImageToolsFacade;
 use Isapp\ImageTools\ImageTools;
+use Isapp\ImageTools\Support\PathResolver;
 use Isapp\ImageTools\Tests\TestCase;
 
 use function base64_decode;
@@ -71,6 +72,19 @@ class ImageToolsSourceDiskTest extends TestCase
             $fromS3['path'],
             'A disk-sourced derivative must not collide with the local one.'
         );
+    }
+
+    public function test_manifest_entry_records_the_source_disk(): void
+    {
+        Storage::disk('s3')->put('images/onepx.png', $this->png);
+
+        app(ImageTools::class)->disk('s3')->generate('images/onepx.png?w=16');
+
+        $entries = require base_path('bootstrap/cache/image-tools.php');
+        $seed = app(PathResolver::class)->seed('images/onepx.png?w=16', 's3');
+
+        $this->assertSame('images/onepx.png?w=16', $entries[$seed]['source']);
+        $this->assertSame('s3', $entries[$seed]['source_disk']);
     }
 
     public function test_missing_source_on_disk_returns_null(): void
