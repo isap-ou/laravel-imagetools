@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-09-15
+
 ### Added
 - `imagetools:regenerate` rebuilds manifest entries whose stored file is missing
   or empty. Each entry is rebuilt from the source now recorded next to it, so the
@@ -24,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org).
   GD, or for any other format, the ordinary encode runs. The key is part of the
   canonical seed, so the lossless variant is its own file and existing names are
   unaffected; a switch that is off is dropped from the seed, so it resolves to the
-  plain file instead of a duplicate.
+  plain file instead of a duplicate. ([#16])
 
 ### Fixed
 - `generate()` uploaded a zero-byte file and recorded it in the manifest as a
@@ -35,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ### Changed
 - Raised minimums: `spatie/image` `^3.9.6`, and `spatie/image-optimizer` `^1.10`
-  moved from `suggest` into `require`.
+  moved from `suggest` into `require`. ([#16])
 
 ## [1.2.0] — 2026-07-11
 
@@ -88,7 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ## [1.0.0] — 2025-11-05
 - Initial release.
 
-[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.2.0...main
+[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.3.0...main
+[1.3.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.3.0
 [1.2.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.2.0
 [1.1.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.1.0
 [1.0.3]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.0.3
@@ -105,3 +108,4 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 [#9]: https://github.com/isap-ou/laravel-imagetools/pull/9
 [#12]: https://github.com/isap-ou/laravel-imagetools/pull/12
 [#14]: https://github.com/isap-ou/laravel-imagetools/issues/14
+[#16]: https://github.com/isap-ou/laravel-imagetools/pull/16
