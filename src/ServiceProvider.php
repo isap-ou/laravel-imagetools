@@ -7,6 +7,7 @@ namespace Isapp\ImageTools;
 use Illuminate\Foundation\Application;
 use Isapp\ImageTools\Commands\ClearGeneratedImagesCommand;
 use Isapp\ImageTools\Commands\GenerateImagesCommand;
+use Isapp\ImageTools\Commands\RegenerateImagesCommand;
 use Isapp\ImageTools\Support\Manifest;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
@@ -32,7 +33,11 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
-            $this->commands([GenerateImagesCommand::class, ClearGeneratedImagesCommand::class]);
+            $this->commands([
+                GenerateImagesCommand::class,
+                ClearGeneratedImagesCommand::class,
+                RegenerateImagesCommand::class,
+            ]);
         }
 
         $this->publishes([

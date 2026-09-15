@@ -24,7 +24,8 @@
     "illuminate/filesystem": "^10.0|^11.0|^12.0|^13.0",
     "illuminate/view": "^10.0|^11.0|^12.0|^13.0",
     "nikic/php-parser": "^5",
-    "spatie/image": "^3",
+    "spatie/image": "^3.9.6",
+    "spatie/image-optimizer": "^1.10",
     "symfony/finder": "^6.4|^7.0|^8.0"
   },
   "autoload": {
@@ -38,9 +39,6 @@
     "orchestra/testbench": "^10.6",
     "phpunit/phpunit": "^11.5",
     "roave/security-advisories": "dev-latest"
-  },
-  "suggest": {
-    "spatie/image-optimizer": "Lossless optimization of output images (requires system binaries like jpegoptim, pngquant, gifsicle, svgo)."
   },
   "config": {
     "sort-packages": true

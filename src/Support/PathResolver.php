@@ -9,6 +9,7 @@ use function array_intersect_key;
 use function array_pad;
 use function config;
 use function explode;
+use function filter_var;
 use function http_build_query;
 use function ksort;
 use function parse_str;
@@ -26,7 +27,7 @@ class PathResolver
      * Query keys that define the derivative's identity. Anything outside this set
      * is ignored, so asset() (read) and generate() (write) always agree.
      */
-    public const OPTION_KEYS = ['w', 'h', 'q', 'fit', 'format'];
+    public const OPTION_KEYS = ['w', 'h', 'q', 'fit', 'format', 'lossless'];
 
     /**
      * Canonical "seed" for a path: the query reduced to OPTION_KEYS and sorted,
@@ -36,9 +37,8 @@ class PathResolver
     public function seed(string $path, ?string $sourceDisk = null): string
     {
         [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
-        parse_str($params, $options);
 
-        $options = array_intersect_key($options, array_flip(self::OPTION_KEYS));
+        $options = $this->options($params);
         ksort($options);
 
         $seed = empty($options) ? $filepath : $filepath . '?' . http_build_query($options);
@@ -60,9 +60,8 @@ class PathResolver
     public function storedFile(string $path, ?string $sourceDisk = null): array
     {
         [$filepath, $params] = array_pad(explode('?', $path, 2), 2, '');
-        parse_str($params, $options);
 
-        $options = array_intersect_key($options, array_flip(self::OPTION_KEYS));
+        $options = $this->options($params);
 
         $pathInfo = pathinfo($filepath);
 
@@ -82,5 +81,32 @@ class PathResolver
             'path' => 'image-tools/' . $fileName,
             'disk' => config('image-tools.disk'),
         ];
+    }
+
+    /**
+     * The query reduced to the keys that define identity.
+     *
+     * 'lossless' is a switch rather than a value, so every spelling that means
+     * "on" collapses to 1 and every spelling that means "off" drops out. Without
+     * that, `lossless=0` would earn a second filename holding the same bytes as
+     * the plain one, and `lossless=true` a third.
+     *
+     * @return array<string, mixed>
+     */
+    protected function options(string $params): array
+    {
+        parse_str($params, $options);
+
+        $options = array_intersect_key($options, array_flip(self::OPTION_KEYS));
+
+        if (\array_key_exists('lossless', $options)) {
+            if (filter_var($options['lossless'], FILTER_VALIDATE_BOOLEAN)) {
+                $options['lossless'] = '1';
+            } else {
+                unset($options['lossless']);
+            }
+        }
+
+        return $options;
     }
 }

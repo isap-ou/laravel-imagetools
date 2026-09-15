@@ -121,6 +121,7 @@ Key options:
 | `fit`    | `enum`     | Geometry mode from `Spatie\Image\Enums\Fit` (e.g. `Contain`, `Fill`, `Max`, …). Requires `w` and `h`. |
 | `q`      | `int`      | Output quality (`1..100`).                                                                            |
 | `format` | `enum`     | Output format: `jpeg`, `png`, `gif`, `webp`, `avif`.                                                  |
+| `lossless` | `bool`   | Lossless WebP: `1`, `true`, `on` or `yes` switch it on. Takes effect when the output is a WebP **and** the driver is Imagick; otherwise the ordinary encode runs. A switch that is on is part of the canonical name, so the lossless variant is its own file; a switch that is off resolves to the same file as the plain call. |
 
 > `queue` is a **control flag**, not a transform — see below. It is excluded from the canonical name, so `?w=800` and `?w=800&queue=1` resolve to the **same** file.
 
@@ -210,6 +211,32 @@ Deletes all files referenced in the current manifest and then removes the manife
 php artisan imagetools:clear
 ```
 
+### Regenerate broken files
+
+Walks the manifest and rebuilds every entry whose stored file is **missing or
+empty** — the shape a killed optimizer leaves behind. Each entry is rebuilt from
+the source recorded next to it, so the key and the filename stay the same.
+
+```bash
+php artisan imagetools:regenerate
+```
+
+| Option      | Effect                                                        |
+|:------------|:--------------------------------------------------------------|
+| `--all`     | Regenerate every entry, not only the broken ones.             |
+| `--dry-run` | Report what would be regenerated and write nothing.           |
+
+The manifest is rewritten entry by entry and is never deleted, so the site keeps
+serving while the command runs. An entry that cannot be rebuilt keeps its current
+value and is reported: the command exits with a non‑zero status when anything
+failed. Entries written before the source was recorded are skipped — run
+`imagetools:generate` to rebuild those from the code.
+
+> Each write replaces the whole manifest file, as every `asset()` on a manifest
+> miss already does. An entry that a web request adds while the command runs can
+> therefore be overwritten. Prefer running it during a quiet window, or after
+> `imagetools:generate` has pre‑generated the manifest.
+
 ## What gets written
 
 - A processed file on the configured **disk**, under `image-tools/<name>--<hash>.<ext>`.
@@ -219,6 +246,9 @@ php artisan imagetools:clear
       'resource/images/hero.jpg?h=630&w=1200&fit=contain&format=webp&q=82' => [
           'path' => 'image-tools/hero--a1b2c3d4e5.webp',
           'disk' => 'public',
+          // The source this file was built from, used by imagetools:regenerate.
+          'source' => 'resource/images/hero.jpg?w=1200&h=630&fit=contain&format=webp&q=82',
+          'source_disk' => null,
       ],
   ];
   ```

@@ -44,6 +44,24 @@ class PathResolverTest extends TestCase
         );
     }
 
+    public function test_lossless_is_part_of_the_identity(): void
+    {
+        $lossy = $this->resolver->seed('public/images/a.png?format=webp');
+        $lossless = $this->resolver->seed('public/images/a.png?format=webp&lossless=1');
+
+        $this->assertNotSame($lossy, $lossless);
+        $this->assertNotSame(
+            $this->resolver->storedFile('public/images/a.png?format=webp')['path'],
+            $this->resolver->storedFile('public/images/a.png?format=webp&lossless=1')['path']
+        );
+
+        // Order still does not matter.
+        $this->assertSame(
+            $lossless,
+            $this->resolver->seed('public/images/a.png?lossless=1&format=webp')
+        );
+    }
+
     public function test_source_disk_is_folded_into_the_seed(): void
     {
         $local = $this->resolver->seed('a.jpg?w=200');

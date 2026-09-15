@@ -35,7 +35,8 @@ ahead of time (scanner command), or on a queue.
 - `src/Jobs/GenerateImageJob.php` — queued generation (`ShouldQueue` + `ShouldBeUnique`).
 - `src/Commands/GenerateImagesCommand.php` — scans Blade/PHP (nikic/php-parser) and
   pre‑generates; `src/Commands/ClearGeneratedImagesCommand.php` — removes generated files
-  and the manifest.
+  and the manifest; `src/Commands/RegenerateImagesCommand.php` — rebuilds entries whose
+  stored file is missing or empty, from the source each entry records.
 - `src/Facades/ImageTools.php`, `src/ServiceProvider.php`, `config/image-tools.php`.
 - `tests/` — Feature + Unit (Testbench `TestCase`).
 
@@ -45,12 +46,13 @@ ahead of time (scanner command), or on a queue.
 - Code style is **Laravel Pint** (`pint.json`); run `composer lint` before pushing.
 - **Conventional Commits.** Branch off `main` — never commit to `main` directly. PRs are
   **squash‑merged**.
-- CI must stay green: matrix (PHP 8.2–8.4 × Laravel 12/13), Pint, and the MinIO S3 job.
+- CI must stay green: matrix (PHP 8.2–8.4 × Laravel 12/13), Pint, the Imagick-driver job, and
+  the MinIO S3 job.
 
 ## Invariants — do not break
 
 - The manifest key **and** the generated filename both derive from one canonical "seed":
-  the query reduced to the supported keys (`w, h, q, fit, format`), sorted. `asset()`
+  the query reduced to the supported keys (`w, h, q, fit, format, lossless`), sorted. `asset()`
   (read path) and `generate()` (write path) MUST use the same derivation — both go through
   `PathResolver::seed()` / `storedFile()`. Divergence causes cache misses and broken URLs.
 - `queue` is a **control flag**, deliberately excluded from the seed, so it never affects
@@ -58,6 +60,9 @@ ahead of time (scanner command), or on a queue.
 - The **source disk** (set via `disk()`) is folded into the seed so the same path read from
   different disks never collides; it is used only as a key/hash input, never parsed as a path.
 - Default (non‑queued, local‑source) behaviour must remain fully **synchronous** and unchanged.
+- A manifest entry records the `source` and `source_disk` it was built from. `imagetools:regenerate`
+  rebuilds from those recorded values — the seed in the key is never parsed back into a path and a
+  disk. The command also never deletes the manifest or an entry.
 
 ## Where to read more
 

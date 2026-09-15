@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+- `imagetools:regenerate` rebuilds manifest entries whose stored file is missing
+  or empty. Each entry is rebuilt from the source now recorded next to it, so the
+  canonical key and the filename do not move. `--all` regenerates every entry and
+  `--dry-run` only reports. The manifest is rewritten entry by entry and is never
+  deleted, so an entry that cannot be rebuilt keeps its current value. ([#14])
+- Manifest entries carry the `source` (`path?query`) and `source_disk` they were
+  built from. `asset()` still reads `path` and `disk` only, so entries written by
+  earlier versions stay readable. ([#14])
+- A `lossless` query key for WebP output, e.g.
+  `ImageTools::asset('hero.png?format=webp&lossless=1')` — `1`, `true`, `on` and
+  `yes` all switch it on, the way the `queue` flag reads them. It takes effect when the
+  output is a WebP and the driver is Imagick; the encode then runs lossless and the
+  optimizer re-encodes with `cwebp -lossless` instead of the lossy default. Under
+  GD, or for any other format, the ordinary encode runs. The key is part of the
+  canonical seed, so the lossless variant is its own file and existing names are
+  unaffected; a switch that is off is dropped from the seed, so it resolves to the
+  plain file instead of a duplicate.
+
+### Fixed
+- `generate()` uploaded a zero-byte file and recorded it in the manifest as a
+  success when an optimizer was killed mid-write, leaving `asset()` to serve a
+  broken URL for the life of the manifest. The encode is now rejected when it
+  produces no bytes: nothing is uploaded, no entry is written, `null` is returned
+  and a warning is logged. ([#14])
+
+### Changed
+- Raised minimums: `spatie/image` `^3.9.6`, and `spatie/image-optimizer` `^1.10`
+  moved from `suggest` into `require`.
+
 ## [1.2.0] — 2026-07-11
 
 ### Added
@@ -74,3 +104,4 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 [#8]: https://github.com/isap-ou/laravel-imagetools/pull/8
 [#9]: https://github.com/isap-ou/laravel-imagetools/pull/9
 [#12]: https://github.com/isap-ou/laravel-imagetools/pull/12
+[#14]: https://github.com/isap-ou/laravel-imagetools/issues/14

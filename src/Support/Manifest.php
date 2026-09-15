@@ -16,7 +16,7 @@ use function var_export;
  */
 class Manifest
 {
-    /** @var array<string, array<string, array{path: string, disk: string}>> */
+    /** @var array<string, array<string, array{path: string, disk: string, source?: string, source_disk?: string|null}>> */
     protected array $namespaces = ['default' => []];
 
     public function __construct(protected string $path)
@@ -51,13 +51,23 @@ class Manifest
         return isset($this->namespaces[$namespace]);
     }
 
+    /**
+     * Every entry of a namespace, keyed by canonical seed.
+     *
+     * @return array<string, array{path: string, disk: string, source?: string, source_disk?: string|null}>
+     */
+    public function all(string $namespace = 'default'): array
+    {
+        return $this->namespaces[$namespace] ?? [];
+    }
+
     public function has(string $namespace, string $key): bool
     {
         return isset($this->namespaces[$namespace][$key]);
     }
 
     /**
-     * @return array{path: string, disk: string}|null
+     * @return array{path: string, disk: string, source?: string, source_disk?: string|null}|null
      */
     public function get(string $namespace, string $key): ?array
     {
@@ -68,7 +78,7 @@ class Manifest
      * Record a seed -> stored-file mapping and persist the manifest to disk.
      * Opcache is invalidated to ensure fresh reads after deployment.
      *
-     * @param  array{path: string, disk: string}  $info
+     * @param  array{path: string, disk: string, source?: string, source_disk?: string|null}  $info
      */
     public function put(string $namespace, string $key, array $info): void
     {
