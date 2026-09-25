@@ -12,7 +12,6 @@ use Isapp\ImageTools\ImageTools;
 use Isapp\ImageTools\Jobs\GenerateImageJob;
 use Isapp\ImageTools\Tests\TestCase;
 
-use function base64_decode;
 use function base_path;
 
 class ImageToolsQueueTest extends TestCase
@@ -23,7 +22,7 @@ class ImageToolsQueueTest extends TestCase
         Storage::fake('public');
 
         File::ensureDirectoryExists(base_path('public/images'));
-        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $png = $this->pngBytes();
         File::put(base_path('public/images/queue.png'), $png);
 
         $manifestFile = base_path('bootstrap/cache/image-tools.php');
@@ -90,6 +89,23 @@ class ImageToolsQueueTest extends TestCase
         $manifest = require base_path('bootstrap/cache/image-tools.php');
         $this->assertArrayHasKey('public/images/queue.png?w=16', $manifest);
         Storage::disk('public')->assertExists($manifest['public/images/queue.png?w=16']['path']);
+    }
+
+    public function test_job_for_a_width_above_the_source_stores_no_file(): void
+    {
+        File::put(base_path('public/images/queue-small.png'), $this->pngBytes(40, 20));
+
+        (new GenerateImageJob('public/images/queue-small.png?w=80&queue=1'))->handle();
+
+        $manifest = require base_path('bootstrap/cache/image-tools.php');
+        $this->assertNull($manifest['public/images/queue-small.png?w=80']['path']);
+        $this->assertSame([], Storage::disk('public')->allFiles('image-tools'));
+
+        // Once the worker has run, later renders get null and nothing is queued again.
+        Bus::fake();
+
+        $this->assertNull(app(ImageTools::class)->asset('public/images/queue-small.png?w=80&queue=1'));
+        Bus::assertNotDispatched(GenerateImageJob::class);
     }
 
     public function test_dispatched_job_uses_configured_connection_and_queue(): void

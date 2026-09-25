@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Isapp\ImageTools\Tests\TestCase;
 
-use function base64_decode;
 use function base_path;
 
 class GenerateImagesCommandTest extends TestCase
@@ -24,7 +23,7 @@ class GenerateImagesCommandTest extends TestCase
         Storage::fake('public');
 
         File::ensureDirectoryExists(base_path('public/images'));
-        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $png = $this->pngBytes();
         File::put(base_path('public/images/scan.png'), $png);
 
         $manifestFile = base_path('bootstrap/cache/image-tools.php');
@@ -80,7 +79,7 @@ class GenerateImagesCommandTest extends TestCase
     {
         // Source lives ONLY on the 's3' disk; the derivative is written to 'public'.
         Storage::fake('s3');
-        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $png = $this->pngBytes();
         Storage::disk('s3')->put('assets/scan.png', $png);
 
         Config::set('image-tools.blade_paths', [$this->bladeDir]);

@@ -34,6 +34,7 @@
     }
   },
   "require-dev": {
+    "ext-gd": "*",
     "laravel/pint": "^1",
     "league/flysystem-aws-s3-v3": "^3.0",
     "orchestra/testbench": "^10.6",

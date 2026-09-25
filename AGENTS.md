@@ -12,7 +12,7 @@ ahead of time (scanner command), or on a queue.
 
 ## Setup
 
-- PHP **^8.2**. Install: `composer install`.
+- PHP **^8.2** with `ext-gd` (the tests draw their fixtures with GD). Install: `composer install`.
 - Dependencies live in `vendor/` — never assume an API; read the installed source.
 
 ## Commands
@@ -27,7 +27,8 @@ ahead of time (scanner command), or on a queue.
 
 - `src/ImageTools.php` — the orchestrator (`asset()`, `generate()`, `disk()`, queued
   dispatch). Depends on three injected collaborators in `src/Support/`:
-  - `Support/Manifest.php` — the PHP manifest state + persistence (load/has/get/put).
+  - `Support/Manifest.php` — the PHP manifest state + persistence (load/has/get/put/clear;
+    writes take the `<manifest>.lock` lock).
   - `Support/PathResolver.php` — canonical `seed()` and the deterministic `storedFile()`.
   - `Support/SourceReader.php` — resolves a source to a local path (local or disk→temp).
   Wiring lives in `src/ServiceProvider.php` (`Manifest` is bound with its config path; the
@@ -59,10 +60,23 @@ ahead of time (scanner command), or on a queue.
   the filename or manifest key.
 - The **source disk** (set via `disk()`) is folded into the seed so the same path read from
   different disks never collides; it is used only as a key/hash input, never parsed as a path.
-- Default (non‑queued, local‑source) behaviour must remain fully **synchronous** and unchanged.
+- Default (non‑queued, local‑source) behaviour stays fully **synchronous**; only the `queue` flag
+  defers generation.
 - A manifest entry records the `source` and `source_disk` it was built from. `imagetools:regenerate`
   rebuilds from those recorded values — the seed in the key is never parsed back into a path and a
   disk. The command also never deletes the manifest or an entry.
+- A resize by `w` or `h` never enlarges the source unless `allow_upscale` is on. Such a request
+  gets an entry with `path => null` and no file, and `asset()` returns `null` for it. `fit` is
+  never affected. `allow_upscale` is not part of the seed. Every reader of an entry (`asset()`,
+  `imagetools:clear`, `imagetools:regenerate`) must handle a null `path`.
+- `Manifest::put()` writes under a lock (`<manifest>.lock`) and starts from the file on disk, then
+  changes one key; `Manifest::clear()` reads and deletes under the same lock. Never write an
+  in‑memory copy of a whole manifest back: a queue worker holds the `image-tools` singleton between
+  jobs, and its copy can be old. The lock must never make a write fail — it falls back to a
+  read‑only handle, then to no lock with a warning.
+- A clean-up delete of an old file (`recordOversize()`) comes after the manifest write and never
+  fails the request. A refused delete is logged as a warning, both when the disk throws and when
+  `delete()` returns `false` (a disk with `'throw' => false`, the Laravel default).
 
 ## Where to read more
 

@@ -26,6 +26,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Allow Upscale
+    |--------------------------------------------------------------------------
+    |
+    | Whether a resize by "w" or "h" may enlarge a source that is smaller than
+    | the request. When false (the default), such a request stores no file:
+    | the manifest records it with a null "path" and asset() returns null, so
+    | the template can leave the image out. Requests with "fit" are not
+    | affected. The value is not part of the file name: after a change, run
+    | "imagetools:regenerate --all" to apply it to the existing entries.
+    */
+    'allow_upscale' => (bool) env('IMAGE_TOOLS_ALLOW_UPSCALE', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Manifest Path
     |--------------------------------------------------------------------------
     |
@@ -77,6 +91,8 @@ return [
     | yet, the derivative is produced in a queued job instead of synchronously.
     | asset() returns the final (deterministic) URL immediately; the file
     | appears once the worker finishes. Handy for pages with many images.
+    | A request larger than the source (see allow_upscale) gets no file: that
+    | URL stays a 404, and calls after the worker has run return null.
     |
     | - queue_connection: connection to dispatch the job on. Falls back to the
     |                     app's default queue connection (QUEUE_CONNECTION).

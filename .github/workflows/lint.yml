@@ -18,6 +18,8 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
+          # composer.json require-dev declares ext-gd (the test fixtures are drawn with GD).
+          extensions: gd
           coverage: none
 
       - name: Install dependencies

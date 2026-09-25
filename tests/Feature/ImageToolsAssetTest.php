@@ -54,7 +54,7 @@ class ImageToolsAssetTest extends TestCase
         }
 
         File::ensureDirectoryExists(base_path('public/images'));
-        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $png = $this->pngBytes();
         File::put(base_path('public/images/test.png'), $png);
 
         $requested = 'public/images/test.png?w=16';
@@ -81,7 +81,7 @@ class ImageToolsAssetTest extends TestCase
         }
 
         File::ensureDirectoryExists(base_path('public/images'));
-        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $png = $this->pngBytes();
         File::put(base_path('public/images/schema.png'), $png);
         ImageToolsFacade::loadManifest();
 
@@ -92,6 +92,38 @@ class ImageToolsAssetTest extends TestCase
 
         $this->assertNotEmpty($withUnknown);
         $this->assertSame($clean, $withUnknown, 'Unknown query params must not change the resolved asset URL.');
+    }
+
+    public function test_asset_returns_null_for_a_width_above_the_source(): void
+    {
+        $manifestFile = base_path('bootstrap/cache/image-tools.php');
+        if (File::exists($manifestFile)) {
+            File::delete($manifestFile);
+        }
+
+        File::ensureDirectoryExists(base_path('public/images'));
+        File::put(base_path('public/images/small.png'), $this->pngBytes(40, 20));
+
+        $this->assertNull(ImageToolsFacade::asset('public/images/small.png?w=80'));
+        $this->assertSame([], Storage::disk('public')->allFiles('image-tools'));
+    }
+
+    public function test_asset_returns_null_for_an_entry_without_a_file(): void
+    {
+        // The source does not exist: a call to generate() would return '' instead of null.
+        $key = 'public/images/gone.png?w=80';
+        $manifest = [$key => ['path' => null, 'disk' => null, 'source' => $key, 'source_disk' => null]];
+
+        File::put(base_path('bootstrap/cache/image-tools.php'), '<?php return ' . var_export($manifest, true) . ';');
+        ImageToolsFacade::loadManifest();
+
+        $this->assertNull(ImageToolsFacade::asset($key));
+    }
+
+    public function test_asset_returns_empty_string_when_generation_fails(): void
+    {
+        // A failure stays distinct from a request larger than the source, which returns null.
+        $this->assertSame('', ImageToolsFacade::asset('public/images/missing.png?w=10'));
     }
 
     public function test_asset_returns_empty_string_for_unknown_manifest_namespace(): void

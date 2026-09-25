@@ -12,7 +12,6 @@ use Isapp\ImageTools\ImageTools;
 use Isapp\ImageTools\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Group;
 
-use function base64_decode;
 use function base_path;
 use function env;
 
@@ -62,7 +61,7 @@ class ImageToolsS3IntegrationTest extends TestCase
         }
 
         File::ensureDirectoryExists(base_path('public/images'));
-        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $png = $this->pngBytes();
         File::put(base_path('public/images/s3.png'), $png);
 
         $manifestFile = base_path('bootstrap/cache/image-tools.php');
