@@ -11,8 +11,9 @@ use Isapp\ImageTools\ImageTools;
 use Isapp\ImageTools\Support\PathResolver;
 use Isapp\ImageTools\Tests\TestCase;
 
-use function base64_decode;
 use function base_path;
+use function glob;
+use function storage_path;
 
 class ImageToolsSourceDiskTest extends TestCase
 {
@@ -24,7 +25,7 @@ class ImageToolsSourceDiskTest extends TestCase
         Storage::fake('public'); // output disk (config image-tools.disk)
         Storage::fake('s3');     // source disk
 
-        $this->png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $this->png = $this->pngBytes();
 
         $manifestFile = base_path('bootstrap/cache/image-tools.php');
         if (File::exists($manifestFile)) {
@@ -36,21 +37,39 @@ class ImageToolsSourceDiskTest extends TestCase
     public function test_disk_reads_the_source_from_the_filesystem(): void
     {
         // Source lives ONLY on the 's3' disk, not at base_path().
-        Storage::disk('s3')->put('images/onepx.png', $this->png);
-        $this->assertFileDoesNotExist(base_path('images/onepx.png'));
+        Storage::disk('s3')->put('images/fixture.png', $this->png);
+        $this->assertFileDoesNotExist(base_path('images/fixture.png'));
 
-        $info = app(ImageTools::class)->disk('s3')->generate('images/onepx.png?w=16&format=webp');
+        $info = app(ImageTools::class)->disk('s3')->generate('images/fixture.png?w=16&format=webp');
 
         $this->assertIsArray($info);
         Storage::disk('public')->assertExists($info['path']);
         $this->assertNotEmpty(Storage::disk('public')->get($info['path']));
     }
 
+    public function test_a_width_above_a_disk_source_stores_no_file(): void
+    {
+        Storage::disk('s3')->put('images/small.png', $this->pngBytes(40, 20));
+
+        $this->assertNull(ImageToolsFacade::disk('s3')->asset('images/small.png?w=80'));
+
+        // The entry is keyed with the source disk, like every other disk-sourced entry.
+        $entries = require base_path('bootstrap/cache/image-tools.php');
+        $entry = $entries['s3:images/small.png?w=80'];
+
+        $this->assertNull($entry['path']);
+        $this->assertSame('s3', $entry['source_disk']);
+        $this->assertSame([], Storage::disk('public')->allFiles('image-tools'));
+
+        // The early return still removes the temporary copy of the source.
+        $this->assertSame([], glob(storage_path('image-tools/source-*')));
+    }
+
     public function test_fluent_disk_via_facade_returns_a_url(): void
     {
-        Storage::disk('s3')->put('images/onepx.png', $this->png);
+        Storage::disk('s3')->put('images/fixture.png', $this->png);
 
-        $url = ImageToolsFacade::disk('s3')->asset('images/onepx.png?w=16');
+        $url = ImageToolsFacade::disk('s3')->asset('images/fixture.png?w=16');
 
         $this->assertNotEmpty($url);
     }
@@ -76,14 +95,14 @@ class ImageToolsSourceDiskTest extends TestCase
 
     public function test_manifest_entry_records_the_source_disk(): void
     {
-        Storage::disk('s3')->put('images/onepx.png', $this->png);
+        Storage::disk('s3')->put('images/fixture.png', $this->png);
 
-        app(ImageTools::class)->disk('s3')->generate('images/onepx.png?w=16');
+        app(ImageTools::class)->disk('s3')->generate('images/fixture.png?w=16');
 
         $entries = require base_path('bootstrap/cache/image-tools.php');
-        $seed = app(PathResolver::class)->seed('images/onepx.png?w=16', 's3');
+        $seed = app(PathResolver::class)->seed('images/fixture.png?w=16', 's3');
 
-        $this->assertSame('images/onepx.png?w=16', $entries[$seed]['source']);
+        $this->assertSame('images/fixture.png?w=16', $entries[$seed]['source']);
         $this->assertSame('s3', $entries[$seed]['source_disk']);
     }
 

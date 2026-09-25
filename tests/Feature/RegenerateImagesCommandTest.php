@@ -9,8 +9,8 @@ use Illuminate\Support\Facades\Storage;
 use Isapp\ImageTools\ImageTools;
 use Isapp\ImageTools\Tests\TestCase;
 
-use function base64_decode;
 use function base_path;
+use function getimagesizefromstring;
 use function var_export;
 
 class RegenerateImagesCommandTest extends TestCase
@@ -24,7 +24,7 @@ class RegenerateImagesCommandTest extends TestCase
         parent::setUp();
         Storage::fake('public');
 
-        $this->png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==');
+        $this->png = $this->pngBytes();
 
         File::ensureDirectoryExists(base_path('public/images'));
         File::put(base_path('public/images/regen.png'), $this->png);
@@ -98,6 +98,46 @@ class RegenerateImagesCommandTest extends TestCase
 
         $this->assertSame([], Storage::disk('public')->files('image-tools'));
         $this->assertSame($entries, require $this->manifestFile);
+    }
+
+    public function test_an_entry_without_a_file_is_healthy_and_all_rebuilds_it_by_the_current_rules(): void
+    {
+        File::put(base_path('public/images/regen-small.png'), $this->pngBytes(40, 20));
+
+        $oversize = app(ImageTools::class)->generate('public/images/regen-small.png?w=80');
+        $this->assertNull($oversize['path']);
+
+        $this->artisan('imagetools:regenerate')
+            ->expectsOutputToContain('healthy 1')
+            ->assertSuccessful();
+        $this->assertSame([], Storage::disk('public')->files('image-tools'));
+
+        // A config change applies to the existing entry only through --all.
+        config()->set('image-tools.allow_upscale', true);
+
+        $this->artisan('imagetools:regenerate', ['--all' => true])->assertSuccessful();
+
+        // assertExists() checks nothing for a null path, so the path is checked first.
+        $entry = (require $this->manifestFile)['public/images/regen-small.png?w=80'];
+        $this->assertNotNull($entry['path']);
+
+        [$width] = getimagesizefromstring(Storage::disk('public')->get($entry['path']));
+        $this->assertSame(80, $width);
+    }
+
+    public function test_all_turns_an_enlarged_entry_into_one_without_a_file(): void
+    {
+        File::put(base_path('public/images/regen-small.png'), $this->pngBytes(40, 20));
+
+        // The entry and the file an earlier, enlarging version left behind.
+        config()->set('image-tools.allow_upscale', true);
+        $old = app(ImageTools::class)->generate('public/images/regen-small.png?w=80');
+        config()->set('image-tools.allow_upscale', false);
+
+        $this->artisan('imagetools:regenerate', ['--all' => true])->assertSuccessful();
+
+        $this->assertNull((require $this->manifestFile)['public/images/regen-small.png?w=80']['path']);
+        Storage::disk('public')->assertMissing($old['path']);
     }
 
     public function test_a_failed_entry_keeps_its_manifest_record_and_the_others_are_rewritten(): void

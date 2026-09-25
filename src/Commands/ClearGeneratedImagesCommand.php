@@ -7,6 +7,7 @@ namespace Isapp\ImageTools\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
+use Isapp\ImageTools\Support\Manifest;
 
 use function app;
 use function base_path;
@@ -22,7 +23,7 @@ class ClearGeneratedImagesCommand extends Command
 
     protected $description = 'Clear generated ImageTools files and remove the manifest.';
 
-    public function handle(): int
+    public function handle(Manifest $manifest): int
     {
         // Read package configuration (disk, manifest path, scan paths).
         $config = app('config')->get('image-tools');
@@ -36,14 +37,18 @@ class ClearGeneratedImagesCommand extends Command
             return self::SUCCESS;
         }
 
-        // Load current manifest (array of [path, disk] entries).
-        $manifest = require $defaultManifest;
+        // Read the entries and remove the manifest first, to avoid stale reads.
+        // Both happen under the manifest's write lock, so a write in progress
+        // cannot put the old entries back after the file is gone.
+        $entries = $manifest->clear();
 
-        // Remove the manifest first to avoid stale reads.
-        File::delete($defaultManifest);
+        // Delete each generated file using its original disk. An entry for a
+        // request above the source size has no file (a null path) to delete.
+        foreach ($entries as $file) {
+            if ($file['path'] === null) {
+                continue;
+            }
 
-        // Delete each generated file using its original disk.
-        foreach ($manifest as $file) {
             Storage::disk($file['disk'])->delete($file['path']);
         }
 

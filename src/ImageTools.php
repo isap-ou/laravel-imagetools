@@ -35,6 +35,7 @@ use function str_ends_with;
  * Usage:
  *  - ImageTools::asset('path/to/img.jpg?w=1200&h=630&fit=contain&format=webp&q=82')
  *    returns a URL from the configured filesystem disk and records the mapping in a PHP manifest.
+ *    A resize by w or h above the source size returns null instead (see 'allow_upscale').
  *  - Call disk() to read the original from a Laravel filesystem disk instead of
  *    locally, e.g. ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200').
  *
@@ -82,8 +83,11 @@ class ImageTools
      *
      * @param  string  $path  Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
      * @param  string  $manifest  Manifest namespace ('default' by default)
+     * @return string|null null when the manifest entry has no file: the request asked
+     *                     for a size above the source while upscaling was off; ''
+     *                     when the namespace is unknown or the generation fails
      */
-    public function asset(string $path, string $manifest = 'default'): string
+    public function asset(string $path, string $manifest = 'default'): ?string
     {
         if (! $this->manifest->exists($manifest)) {
             // TODO throw exception;
@@ -95,7 +99,9 @@ class ImageTools
         if (! $this->manifest->has($manifest, $seed)) {
             // Deferred mode: when the request opts in via a truthy "queue" flag,
             // push generation onto the queue and return the final, deterministic
-            // URL immediately. The file appears once the worker finishes.
+            // URL immediately. The file appears once the worker finishes. For a
+            // request above the source size no file appears: the worker records
+            // a null path, and later calls return null.
             if ($this->shouldQueue($path)) {
                 $this->dispatchGeneration($path, $manifest);
 
@@ -111,6 +117,11 @@ class ImageTools
 
         $file = $this->manifest->get($manifest, $seed);
 
+        // A request above the source size has an entry but no file.
+        if ($file['path'] === null) {
+            return null;
+        }
+
         return Storage::disk($file['disk'])->url($file['path']);
     }
 
@@ -123,7 +134,11 @@ class ImageTools
      *  - format: one of jpeg, png, gif, webp, avif
      *  - lossless (bool): lossless WebP; see applyLossless() for its two conditions
      *
-     * @return array{path: string, disk: string}|null null on missing source or storage failure
+     * A resize by w or h above the source size stores no file unless the
+     * 'allow_upscale' config allows it; see recordOversize().
+     *
+     * @return array{path: string|null, disk: string|null}|null null on missing source or storage
+     *                                                          failure; a null path and disk for a request above the source size
      */
     public function generate(string $path, string $manifest = 'default'): ?array
     {
@@ -154,6 +169,10 @@ class ImageTools
 
         try {
             $image = new Image($source['path']);
+
+            if (! config('image-tools.allow_upscale') && $this->exceedsSource($image, $validated)) {
+                return $this->recordOversize($path, $manifest);
+            }
 
             // Apply geometry: 'fit' resizes to exactly w x h; otherwise resize by
             // whichever single side is present. Cast to int for the driver.
@@ -221,6 +240,89 @@ class ImageTools
             if ($source['temporary']) {
                 File::delete($source['path']);
             }
+        }
+    }
+
+    /**
+     * Whether a resize by one side asks for more than the source holds. Without
+     * 'fit' the geometry resizes by 'w' when it is present, else by 'h', so only
+     * that side is compared. 'fit' produces the box it is given and never counts.
+     * The loaded image is already auto-rotated, so its size is the one the resize
+     * works on.
+     *
+     * @param  array<string, mixed>  $validated
+     */
+    protected function exceedsSource(Image $image, array $validated): bool
+    {
+        if (! empty($validated['fit'])) {
+            return false;
+        }
+
+        if (! empty($validated['w'])) {
+            return (int) $validated['w'] > $image->getWidth();
+        }
+
+        if (! empty($validated['h'])) {
+            return (int) $validated['h'] > $image->getHeight();
+        }
+
+        return false;
+    }
+
+    /**
+     * Record a request above the source size as an entry with no file, so the
+     * next asset() call returns null without loading the source again. A file
+     * that an earlier, enlarging run stored under this key is deleted: once the
+     * entry holds a null path, no command can find that file any more.
+     *
+     * The file is looked for at its deterministic name as well as in the entry.
+     * A manifest can lose the entry while the file stays on the disk — a
+     * per-release bootstrap/cache starts empty after each deploy.
+     *
+     * @return array{path: null, disk: null}
+     */
+    protected function recordOversize(string $path, string $manifest): array
+    {
+        $seed = $this->paths->seed($path, $this->sourceDisk);
+        $previous = $this->manifest->get($manifest, $seed);
+        $stored = $this->paths->storedFile($path, $this->sourceDisk);
+
+        // The entry comes first. If a delete then fails, the worst case is a file
+        // that nothing points to, never an entry that points to a deleted file.
+        $this->manifest->put($manifest, $seed, [
+            'path' => null,
+            'disk' => null,
+            'source' => $path,
+            'source_disk' => $this->sourceDisk,
+        ]);
+
+        $this->deleteQuietly($stored['disk'], $stored['path']);
+
+        if (! empty($previous['path']) && [$previous['disk'], $previous['path']] !== [$stored['disk'], $stored['path']]) {
+            $this->deleteQuietly($previous['disk'], $previous['path']);
+        }
+
+        return [
+            'path' => null,
+            'disk' => null,
+        ];
+    }
+
+    /**
+     * Delete an old file as a clean-up step. A disk can refuse the delete — for
+     * example, bucket credentials without delete rights on a disk with its
+     * 'throw' option on. That must not fail the request that asked for the image.
+     */
+    protected function deleteQuietly(?string $disk, string $path): void
+    {
+        try {
+            Storage::disk($disk)->delete($path);
+        } catch (\Throwable $e) {
+            Log::warning('ImageTools: an old file could not be deleted.', [
+                'disk' => $disk,
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

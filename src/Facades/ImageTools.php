@@ -8,8 +8,9 @@ use Illuminate\Support\Facades\Facade;
 
 /**
  * @method static \Isapp\ImageTools\ImageTools disk(string $disk)
- * @method static void generate(string $path, string $manifest = 'default')
- * @method static string asset(string $path, string $manifest = 'default')
+ * @method static void loadManifest(?string $path = null)
+ * @method static array{path: string|null, disk: string|null}|null generate(string $path, string $manifest = 'default')
+ * @method static string|null asset(string $path, string $manifest = 'default')
  */
 class ImageTools extends Facade
 {

@@ -27,6 +27,7 @@ Deterministic, query‑driven image generation for Laravel — inspired by **vit
 - 🔎 **Scanner command** to pre‑generate all images referenced in your code
 - 🧹 **Clear command** to remove generated files & the manifest
 - ⏳ **Deferred generation** via a `queue` flag — defer heavy/responsive work to the queue
+- 🚫 **No upscaling** by default — a `w`/`h` request without `fit` above the source size returns `null` instead of an enlarged file
 
 ## Requirements
 
@@ -61,11 +62,15 @@ php artisan vendor:publish --provider="Isapp\\ImageTools\\ServiceProvider"
 />
 ```
 
+> When the source is narrower than 640px, `asset()` returns `null` and `src` is empty.
+> See [Larger than the source](#larger-than-the-source).
+
 **Pure PHP**
 
 ```php
 use Isapp\\ImageTools\\Facades\\ImageTools;
 
+// A string URL, or null when the source is narrower than 640px (see "Larger than the source").
 $url = ImageTools::asset('resource/images/placeholder.jpg?w=640&q=75&format=webp');
 ```
 
@@ -91,6 +96,7 @@ All options live in `config/image-tools.php` (with inline comments). You can als
 
 ```dotenv
 IMAGE_TOOLS_DISK=public
+IMAGE_TOOLS_ALLOW_UPSCALE=false
 IMAGE_TOOLS_MANIFEST_PATH=bootstrap/cache/image-tools.php
 IMAGE_TOOLS_BLADE_PATHS=resources/views,modules/*/resources/views
 IMAGE_TOOLS_PHP_PATHS=app,modules
@@ -104,6 +110,7 @@ IMAGE_TOOLS_QUEUE_UNIQUE_FOR=3600
 Key options:
 
 - **`disk`** — Laravel filesystem disk where processed files are written and served from (`public`, `s3`, `r2`, …).
+- **`allow_upscale`** — `false` by default: a resize by `w` or `h` above the source size stores no file, and `asset()` returns `null`. See [Larger than the source](#larger-than-the-source).
 - **`manifest_path`** — Path to the PHP manifest file that stores the mapping (relative paths resolve from the project base path).
 - **`blade_paths`** — Directories with Blade templates to scan for usages.
 - **`php_paths`** — Additional PHP directories to scan (controllers, services, etc.).
@@ -116,14 +123,80 @@ Key options:
 
 | Key      | Type       | Description                                                                                           |
 |:---------|:-----------|:------------------------------------------------------------------------------------------------------|
-| `w`      | `int`      | Target width (px).                                                                                    |
-| `h`      | `int`      | Target height (px).                                                                                   |
+| `w`      | `int`      | Target width (px). Without `fit` and above the source width, no file is stored — see [Larger than the source](#larger-than-the-source). |
+| `h`      | `int`      | Target height (px). Without `w` or `fit` and above the source height, no file is stored.              |
 | `fit`    | `enum`     | Geometry mode from `Spatie\Image\Enums\Fit` (e.g. `Contain`, `Fill`, `Max`, …). Requires `w` and `h`. |
 | `q`      | `int`      | Output quality (`1..100`).                                                                            |
 | `format` | `enum`     | Output format: `jpeg`, `png`, `gif`, `webp`, `avif`.                                                  |
 | `lossless` | `bool`   | Lossless WebP: `1`, `true`, `on` or `yes` switch it on. Takes effect when the output is a WebP **and** the driver is Imagick; otherwise the ordinary encode runs. A switch that is on is part of the canonical name, so the lossless variant is its own file; a switch that is off resolves to the same file as the plain call. |
 
 > `queue` is a **control flag**, not a transform — see below. It is excluded from the canonical name, so `?w=800` and `?w=800&queue=1` resolve to the **same** file.
+
+### Larger than the source
+
+A resize by `w` or `h` does not enlarge a source that is smaller than the request.
+An enlarged file holds no more detail than the source, and it is much heavier. For
+example, `?w=3840` on a 1280px source stores no file. The manifest records the
+request with `'path' => null`, and `asset()` returns `null`. Later calls read that
+entry and do not load the source again.
+
+- `w` counts when it is greater than the source width. `h` counts only without `w`,
+  when it is greater than the source height. The size is measured after EXIF rotation.
+- `w` equal to the source width is not larger: it stores a file at the source size.
+- `fit` is not affected. For example, `fit=crop&w=1200&h=630` still produces 1200×630
+  from a smaller source.
+- Set `allow_upscale` to `true` (`IMAGE_TOOLS_ALLOW_UPSCALE=true`) to enlarge as
+  version 1.3 and earlier did.
+
+`{{ null }}` prints nothing, but the text around it still prints. A `srcset` needs a
+check before each candidate:
+
+```blade
+@php
+    $srcset = collect([
+        768 => ImageTools::asset('public/images/hero.jpg?w=768&format=webp'),
+        1536 => ImageTools::asset('public/images/hero.jpg?w=1536&format=webp'),
+        3840 => ImageTools::asset('public/images/hero.jpg?w=3840&format=webp'),
+    ])->filter()->map(fn ($url, $width) => "{$url} {$width}w")->implode(', ');
+@endphp
+
+<img
+  src="{{ ImageTools::asset('public/images/hero.jpg?format=webp') }}"
+  srcset="{{ $srcset }}"
+  sizes="100vw"
+  alt="Hero"
+/>
+```
+
+The `src` request has no `w`, so it is never larger than the source and always has
+a file. The package does not add a candidate at the source width: for a 1280px
+source, the list above keeps only `768w`. Add widths that match your sources if you
+need more.
+
+**Upgrading from 1.3 or earlier:** existing entries keep their enlarged files,
+because the key and the filename do not change. Two commands apply the rule:
+
+- `php artisan imagetools:regenerate --all` rebuilds every entry with a recorded
+  source. An entry above the source size gets `'path' => null`, and its enlarged
+  file is deleted. Entries without a recorded source are skipped.
+- `php artisan imagetools:generate` clears all generated files and the manifest,
+  then builds every request it finds in the code by the new rule. A build pipeline
+  that runs it applies the rule on the next deploy.
+
+The enlarged file is deleted even when the manifest no longer holds its entry, for
+example a per‑release `bootstrap/cache`. Pages cached before the run (full‑page
+cache, CDN HTML) still point to the deleted files, so clear those caches after it.
+When opcache does not check timestamps (`opcache.validate_timestamps=0`), reload
+PHP‑FPM too: the web processes keep their compiled copy of the manifest. Restart
+long‑lived processes as well (`php artisan queue:restart`, `php artisan octane:reload`):
+they keep the manifest in memory and would print URLs to the deleted files. When
+several hosts keep their own manifest but share one output disk, run the command on
+each host: the files it deletes are the ones the other manifests still point to. A
+later change to `allow_upscale` needs the same steps.
+
+A `null` entry stays `null` when you replace its source with a larger image: the
+key does not change, so nothing reads the source again. Run
+`imagetools:regenerate --all` after you replace a source.
 
 ## Deferred (queued) generation
 
@@ -142,6 +215,9 @@ When the image hasn't been generated yet:
 - A `GenerateImageJob` is dispatched to the queue; the file appears once a worker
   processes it. Until then the URL 404s — make sure a worker is running
   (`php artisan queue:work`).
+- For a request [larger than the source](#larger-than-the-source), `asset()` cannot
+  know this before the worker reads the source. The worker stores no file, so the
+  URL from the first render stays a 404. Calls after the worker has run return `null`.
 
 The job is **unique** per derivative (`ShouldBeUnique`), so many concurrent page
 renders of the same not-yet-generated image collapse into a single job instead of
@@ -205,7 +281,8 @@ The scanner looks into `config('image-tools.blade_paths')` and `config('image-to
 
 ### Clear generated files
 
-Deletes all files referenced in the current manifest and then removes the manifest file.
+Removes the manifest file, then deletes every file it referenced. The manifest is read
+and removed under its write lock; the `.lock` file stays in place.
 
 ```bash
 php artisan imagetools:clear
@@ -227,19 +304,28 @@ php artisan imagetools:regenerate
 | `--dry-run` | Report what would be regenerated and write nothing.           |
 
 The manifest is rewritten entry by entry and is never deleted, so the site keeps
-serving while the command runs. An entry that cannot be rebuilt keeps its current
+serving while the command runs. The exception is an entry that becomes
+[larger than the source](#larger-than-the-source): its enlarged file is deleted, and
+pages cached before the run still point to it. An entry that cannot be rebuilt keeps its current
 value and is reported: the command exits with a non‑zero status when anything
 failed. Entries written before the source was recorded are skipped — run
 `imagetools:generate` to rebuild those from the code.
 
-> Each write replaces the whole manifest file, as every `asset()` on a manifest
-> miss already does. An entry that a web request adds while the command runs can
-> therefore be overwritten. Prefer running it during a quiet window, or after
-> `imagetools:generate` has pre‑generated the manifest.
+An entry with `'path' => null` is a request [larger than the source](#larger-than-the-source).
+It has no file by design, so it counts as healthy. `--all` rebuilds it by the current
+`allow_upscale` value.
+
+> Each write takes a lock on the manifest and starts from the file as it is on
+> disk, so an entry that a web request or a queue worker adds while the command
+> runs is kept. A long‑lived process no longer writes its old copy of the manifest
+> back over the command's changes. When the lock cannot be taken, the write goes
+> ahead without it and a warning is logged.
 
 ## What gets written
 
 - A processed file on the configured **disk**, under `image-tools/<name>--<hash>.<ext>`.
+- A lock file next to the manifest (`image-tools.php.lock`). Writers take turns on it;
+  it stays in place and holds no data.
 - A PHP **manifest** (by default `bootstrap/cache/image-tools.php`) with entries like:
   ```php
   return [
@@ -248,6 +334,13 @@ failed. Entries written before the source was recorded are skipped — run
           'disk' => 'public',
           // The source this file was built from, used by imagetools:regenerate.
           'source' => 'resource/images/hero.jpg?w=1200&h=630&fit=contain&format=webp&q=82',
+          'source_disk' => null,
+      ],
+      // A request larger than the source: no file, and asset() returns null.
+      'resource/images/icon.png?w=3840' => [
+          'path' => null,
+          'disk' => null,
+          'source' => 'resource/images/icon.png?w=3840',
           'source_disk' => null,
       ],
   ];
@@ -266,12 +359,15 @@ failed. Entries written before the source was recorded are skipped — run
 - **`width(): Argument #1 must be of type int`** — pass numeric values in the query (`w=640`, not `w=640px`).
 - **`fit` requires `w` and `h`** — when using `fit`, provide both dimensions.
 - **No URL / 404** — check the configured `disk` has a URL generator (`php artisan storage:link` for `public` disk).
+- **Empty `src` / `asset()` returns `null`** — the request asks for a `w` or `h` above the source size. See [Larger than the source](#larger-than-the-source): leave the candidate out, ask for a smaller size, or set `allow_upscale`. With `queue=1`, the first render gets a URL that stays a 404 for such a request.
 
 ## Testing
 
 ```bash
 composer test
 ```
+
+The tests draw their image fixtures with GD, so development needs `ext-gd`.
 
 The suite includes an **S3 integration test** (PHPUnit group `s3`) that runs
 against a real S3‑compatible endpoint to verify uploads, URL generation and the
