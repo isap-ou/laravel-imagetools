@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-09-25
+
 ### Added
 - `Manifest::clear()` reads the default manifest and deletes its file under the
   manifest lock. It returns the entries that the file held. `imagetools:clear`
@@ -151,7 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ## [1.0.0] — 2025-11-05
 - Initial release.
 
-[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.3.0...main
+[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.4.0...main
+[1.4.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.4.0
 [1.3.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.3.0
 [1.2.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.2.0
 [1.1.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.1.0
