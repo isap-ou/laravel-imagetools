@@ -375,8 +375,9 @@ clear command. It is **skipped** unless `AWS_ENDPOINT` + `AWS_BUCKET` are set, s
 the default run needs no infrastructure. To run it locally against MinIO:
 
 ```bash
+# MinIO's own images are no longer public; this is Chainguard's MinIO build.
 docker run -d -p 9000:9000 -e MINIO_ROOT_USER=minio \
-  -e MINIO_ROOT_PASSWORD=minio12345 minio/minio server /data
+  -e MINIO_ROOT_PASSWORD=minio12345 cgr.dev/chainguard/minio:latest server /data
 aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://test   # create the bucket
 
 AWS_ENDPOINT=http://127.0.0.1:9000 AWS_BUCKET=test \

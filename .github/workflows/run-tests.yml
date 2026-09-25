@@ -90,12 +90,14 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Start MinIO
-        # The image comes from MinIO's own registry: an anonymous pull of
-        # minio/minio from Docker Hub is denied on the runners.
+        # The image is Chainguard's MinIO build. MinIO's own images are no longer
+        # public: an anonymous pull of minio/minio (Docker Hub) and of
+        # quay.io/minio/minio is denied. The Chainguard entrypoint is the minio
+        # binary, so the arguments stay the same.
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio12345 \
-            quay.io/minio/minio:latest server /data
+            cgr.dev/chainguard/minio:latest server /data
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
