@@ -21,18 +21,22 @@ keeps the old behaviour available.
 - **FR-3** With `allow_upscale=false`, `generate()` for an oversize request stores no file. It
   writes the entry `['path' => null, 'disk' => null, 'source' => $path, 'source_disk' => …]` and
   returns `['path' => null, 'disk' => null]`. `null` still means failure.
-- **FR-4** *(amended after review, twice)* In the FR-3 case, `generate()` first writes the
+- **FR-4** *(amended after review, three times)* In the FR-3 case, `generate()` first writes the
   null-path entry, then deletes the file at the deterministic stored name
   (`PathResolver::storedFile()`) on the configured disk, and also the file of the previous
-  manifest entry when that entry records a different disk/path. A failed delete is caught and
-  logged as a warning; it does not fail `generate()` or `asset()`.
+  manifest entry when that entry records a different disk/path. A failed delete is logged as a
+  warning: a delete that throws, and a `delete()` that returns `false` (a disk with
+  `'throw' => false`). It does not fail `generate()` or `asset()`.
 - **FR-5** `asset()` returns `null` for an entry with `path === null`, on a manifest hit and right
   after a synchronous generation. Return type becomes `?string`. Failures still return `''`.
 - **FR-6** With `allow_upscale=true`, `w`/`h` enlarge as today.
 - **FR-7** The `fit` branch does not change.
 - **FR-8** `imagetools:clear` skips entries with `path === null`. It still deletes the manifest.
-- **FR-9** `imagetools:regenerate` counts an entry with `path === null` as healthy. With `--all`
-  it rebuilds the entry by the current rules.
+- **FR-9** *(amended after review)* `imagetools:regenerate` counts an entry with `path === null`
+  as healthy. With `--all` it rebuilds the entry by the current rules. A rebuild that finds the
+  request larger than the source prints `No file [<key>]` and counts the entry as
+  `larger than the source`, not as `regenerated`. The exit code stays 0. A dry run keeps its
+  summary line, because it rebuilds nothing.
 - **FR-10** README, CHANGELOG `[Unreleased]`, config comment, AGENTS.md invariants, llms.txt and
   the Facade docblock describe the new behaviour. *(Extended after review:)* they also cover
   FR-11, the cache warning for deleted enlarged files, and the queued-mode wording. The release
@@ -83,6 +87,12 @@ keeps the old behaviour available.
 - **AC-21** `Manifest::clear()` returns the entries and removes the file; the `imagetools:clear`
   tests stay green.
 - **AC-22** The shipped config file has `allow_upscale === false`.
+- **AC-23** A disk whose `delete()` returns `false` → an oversize `generate()` still returns the
+  null-path array, and a warning is logged.
+- **AC-24** `regenerate --all` on an entry that becomes larger than the source → the output has
+  `No file [<key>]` and `regenerated 0, larger than the source 1`; the exit code is 0.
+- **AC-25** `put()` and `clear()` read the manifest while its lock is held, and each call releases
+  the lock before it returns.
 - **AC-7b** An entry recording a different path than the stored name → that file is deleted.
 - AC-2 is checked in full: for an `h`-only oversize request the entry `path` is null and
   `asset()` returns null.

@@ -43,7 +43,7 @@ class ClearGeneratedImagesCommand extends Command
         $entries = $manifest->clear();
 
         // Delete each generated file using its original disk. An entry for a
-        // request above the source size has no file (a null path) to delete.
+        // request larger than the source has no file (a null path) to delete.
         foreach ($entries as $file) {
             if ($file['path'] === null) {
                 continue;

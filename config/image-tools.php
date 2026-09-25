@@ -91,7 +91,7 @@ return [
     | yet, the derivative is produced in a queued job instead of synchronously.
     | asset() returns the final (deterministic) URL immediately; the file
     | appears once the worker finishes. Handy for pages with many images.
-    | A request above the source size (see allow_upscale) gets no file: that
+    | A request larger than the source (see allow_upscale) gets no file: that
     | URL stays a 404, and calls after the worker has run return null.
     |
     | - queue_connection: connection to dispatch the job on. Falls back to the

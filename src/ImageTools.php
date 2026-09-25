@@ -35,7 +35,7 @@ use function str_ends_with;
  * Usage:
  *  - ImageTools::asset('path/to/img.jpg?w=1200&h=630&fit=contain&format=webp&q=82')
  *    returns a URL from the configured filesystem disk and records the mapping in a PHP manifest.
- *    A resize by w or h above the source size returns null instead (see 'allow_upscale').
+ *    A resize by w or h larger than the source returns null instead (see 'allow_upscale').
  *  - Call disk() to read the original from a Laravel filesystem disk instead of
  *    locally, e.g. ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200').
  *
@@ -83,9 +83,10 @@ class ImageTools
      *
      * @param  string  $path  Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
      * @param  string  $manifest  Manifest namespace ('default' by default)
-     * @return string|null null when the manifest entry has no file: the request asked
-     *                     for a size above the source while upscaling was off; ''
-     *                     when the namespace is unknown or the generation fails
+     * @return string|null null when the manifest entry has no file: the request is
+     *                     larger than the source and upscaling is off. '' when the
+     *                     namespace is unknown or generate() returns null. A query
+     *                     that fails validation or an image that cannot be read throws.
      */
     public function asset(string $path, string $manifest = 'default'): ?string
     {
@@ -100,7 +101,7 @@ class ImageTools
             // Deferred mode: when the request opts in via a truthy "queue" flag,
             // push generation onto the queue and return the final, deterministic
             // URL immediately. The file appears once the worker finishes. For a
-            // request above the source size no file appears: the worker records
+            // request larger than the source no file appears: the worker records
             // a null path, and later calls return null.
             if ($this->shouldQueue($path)) {
                 $this->dispatchGeneration($path, $manifest);
@@ -117,7 +118,7 @@ class ImageTools
 
         $file = $this->manifest->get($manifest, $seed);
 
-        // A request above the source size has an entry but no file.
+        // A request larger than the source has an entry but no file.
         if ($file['path'] === null) {
             return null;
         }
@@ -134,11 +135,12 @@ class ImageTools
      *  - format: one of jpeg, png, gif, webp, avif
      *  - lossless (bool): lossless WebP; see applyLossless() for its two conditions
      *
-     * A resize by w or h above the source size stores no file unless the
+     * A resize by w or h larger than the source stores no file unless the
      * 'allow_upscale' config allows it; see recordOversize().
      *
-     * @return array{path: string|null, disk: string|null}|null null on missing source or storage
-     *                                                          failure; a null path and disk for a request above the source size
+     * @return array{path: string|null, disk: string|null}|null null for a missing source, an
+     *                                                          empty encode or a failed upload. A null path and
+     *                                                          disk for a request larger than the source.
      */
     public function generate(string $path, string $manifest = 'default'): ?array
     {
@@ -246,8 +248,10 @@ class ImageTools
     /**
      * Whether a resize by one side asks for more than the source holds. Without
      * 'fit' the geometry resizes by 'w' when it is present, else by 'h', so only
-     * that side is compared. 'fit' produces the box it is given and never counts.
-     * The loaded image is already auto-rotated, so its size is the one the resize
+     * that side is compared. 'fit' keeps its own sizing rules and never counts.
+     * For example, 'contain' and 'max' do not always fill the box. The size comes
+     * from the loaded image. The driver has already rotated it by its EXIF
+     * orientation (GD only when ext-exif is loaded), so it is the size the resize
      * works on.
      *
      * @param  array<string, mixed>  $validated
@@ -270,7 +274,7 @@ class ImageTools
     }
 
     /**
-     * Record a request above the source size as an entry with no file, so the
+     * Record a request larger than the source as an entry with no file, so the
      * next asset() call returns null without loading the source again. A file
      * that an earlier, enlarging run stored under this key is deleted: once the
      * entry holds a null path, no command can find that file any more.
@@ -310,18 +314,28 @@ class ImageTools
 
     /**
      * Delete an old file as a clean-up step. A disk can refuse the delete — for
-     * example, bucket credentials without delete rights on a disk with its
-     * 'throw' option on. That must not fail the request that asked for the image.
+     * example, bucket credentials without delete rights. A disk with its 'throw'
+     * option on throws; with the option off, delete() returns false. Both are
+     * logged, and neither fails the request that asked for the image.
      */
     protected function deleteQuietly(?string $disk, string $path): void
     {
         try {
-            Storage::disk($disk)->delete($path);
+            $deleted = Storage::disk($disk)->delete($path);
         } catch (\Throwable $e) {
             Log::warning('ImageTools: an old file could not be deleted.', [
                 'disk' => $disk,
                 'path' => $path,
                 'error' => $e->getMessage(),
+            ]);
+
+            return;
+        }
+
+        if ($deleted === false) {
+            Log::warning('ImageTools: an old file could not be deleted.', [
+                'disk' => $disk,
+                'path' => $path,
             ]);
         }
     }

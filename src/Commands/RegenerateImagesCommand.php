@@ -16,12 +16,14 @@ use function app;
  *
  * By default it only touches entries whose stored file is missing or empty — the
  * shape a killed optimizer leaves behind. An entry with a null path (a request
- * above the source size) has no file by design and is left alone. Each entry is
+ * larger than the source) has no file by design and is left alone. Each entry is
  * rebuilt from the source recorded next to it, so the canonical seed, the key and
- * the filename stay the ones the manifest already holds — unless the rebuild finds
- * the request above the source size: the entry then gets a null path, and its old
- * file is deleted. The manifest is rewritten entry by entry and is never deleted:
- * an entry that cannot be rebuilt keeps its current value.
+ * the filename stay the ones the manifest already holds.
+ *
+ * A rebuild can find the request larger than the source. The entry then gets a
+ * null path, and its old file is deleted. The command reports such an entry on
+ * its own line and in its own count. The manifest is rewritten entry by entry and
+ * is never deleted: an entry that cannot be rebuilt keeps its current value.
  */
 class RegenerateImagesCommand extends Command
 {
@@ -47,6 +49,7 @@ class RegenerateImagesCommand extends Command
         $healthy = 0;
         $skipped = 0;
         $regenerated = 0;
+        $larger = 0;
         $failed = 0;
 
         foreach ($entries as $key => $entry) {
@@ -97,15 +100,27 @@ class RegenerateImagesCommand extends Command
                 continue;
             }
 
+            // The rebuild found the request larger than the source. The entry now
+            // has no file, and generate() deletes its old file. The report shows
+            // these entries apart from the entries that got a file again.
+            if ($result['path'] === null) {
+                $this->warn("No file [{$key}]: the request is larger than the source.");
+                $larger++;
+
+                continue;
+            }
+
             $regenerated++;
         }
 
         $this->info(\sprintf(
-            'Checked %d, healthy %d, %s %d, failed %d, skipped %d.',
+            'Checked %d, healthy %d, %s, failed %d, skipped %d.',
             \count($entries),
             $healthy,
-            $dryRun ? 'to regenerate' : 'regenerated',
-            $regenerated,
+            // A dry run rebuilds nothing, so it cannot tell which entries are larger than the source.
+            $dryRun
+                ? "to regenerate {$regenerated}"
+                : "regenerated {$regenerated}, larger than the source {$larger}",
             $failed,
             $skipped
         ));
@@ -116,7 +131,7 @@ class RegenerateImagesCommand extends Command
     /**
      * A stored file counts as broken when it is gone, or when it is on the disk
      * with no bytes in it — what an optimizer killed mid-write leaves behind.
-     * An entry with a null path is a request above the source size: it has no
+     * An entry with a null path is a request larger than the source: it has no
      * file by design, so it is not broken.
      *
      * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}  $entry

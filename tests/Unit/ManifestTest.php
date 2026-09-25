@@ -11,7 +11,11 @@ use Isapp\ImageTools\Tests\TestCase;
 
 use function base_path;
 use function chmod;
+use function fclose;
+use function flock;
+use function fopen;
 use function posix_geteuid;
+use function realpath;
 use function var_export;
 
 class ManifestTest extends TestCase
@@ -89,6 +93,51 @@ class ManifestTest extends TestCase
 
         // The write took the lock through the read-only handle; it did not go ahead without it.
         Log::shouldNotHaveReceived('warning');
+    }
+
+    public function test_a_write_and_a_clear_read_the_file_under_the_lock(): void
+    {
+        // The read is the start of each read-modify-write, so the lock must be held from there on.
+        $manifest = new class($this->path) extends Manifest
+        {
+            /** @var list<bool> */
+            public array $lockHeldAtRead = [];
+
+            protected function read(string $path): array
+            {
+                $this->lockHeldAtRead[] = ! ManifestTest::lockIsFree($path);
+
+                return parent::read($path);
+            }
+        };
+
+        // Each call releases the lock. The check runs before the next call: a lock that
+        // this process still held would make that call wait for ever.
+        $manifest->put('default', 'a.png?w=8', $this->entry('a.png?w=8', 'image-tools/a.png'));
+        $this->assertTrue(self::lockIsFree($this->path), 'put() did not release the lock.');
+
+        $manifest->clear();
+        $this->assertTrue(self::lockIsFree($this->path), 'clear() did not release the lock.');
+
+        $this->assertSame([true, true], $manifest->lockHeldAtRead);
+    }
+
+    /**
+     * Whether another handle can take the lock of a manifest file now. The lock
+     * file is found the way Manifest::lock() finds it.
+     */
+    public static function lockIsFree(string $path): bool
+    {
+        $handle = fopen((realpath($path) ?: $path) . '.lock', 'c');
+        $free = flock($handle, LOCK_EX | LOCK_NB);
+
+        if ($free) {
+            flock($handle, LOCK_UN);
+        }
+
+        fclose($handle);
+
+        return $free;
     }
 
     public function test_clear_returns_the_entries_and_removes_the_file(): void

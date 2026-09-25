@@ -122,7 +122,7 @@ class ImageToolsAssetTest extends TestCase
 
     public function test_asset_returns_empty_string_when_generation_fails(): void
     {
-        // A failure stays distinct from a request above the source size, which returns null.
+        // A failure stays distinct from a request larger than the source, which returns null.
         $this->assertSame('', ImageToolsFacade::asset('public/images/missing.png?w=10'));
     }
 

@@ -134,7 +134,11 @@ class RegenerateImagesCommandTest extends TestCase
         $old = app(ImageTools::class)->generate('public/images/regen-small.png?w=80');
         config()->set('image-tools.allow_upscale', false);
 
-        $this->artisan('imagetools:regenerate', ['--all' => true])->assertSuccessful();
+        // The run deletes the old file, so the report names the entry and does not count it as regenerated.
+        $this->artisan('imagetools:regenerate', ['--all' => true])
+            ->expectsOutputToContain('No file [public/images/regen-small.png?w=80]')
+            ->expectsOutputToContain('regenerated 0, larger than the source 1')
+            ->assertSuccessful();
 
         $this->assertNull((require $this->manifestFile)['public/images/regen-small.png?w=80']['path']);
         Storage::disk('public')->assertMissing($old['path']);

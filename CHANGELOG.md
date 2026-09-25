@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+- `Manifest::clear()` reads the default manifest and deletes its file under the
+  manifest lock. It returns the entries that the file held. `imagetools:clear`
+  uses it. ([#21])
+
 ### Changed
 - The output of existing queries changes: a resize by `w` or `h` without `fit` no
   longer enlarges a source that is smaller than the request. Such a request stores
@@ -15,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
   `allow_upscale` config key (`IMAGE_TOOLS_ALLOW_UPSCALE`, default `false`) brings
   back the old behaviour. ([#21])
 - `asset()` now returns `?string`. Code that passes its result to a `string`
-  parameter must handle `null`. Failures still return `''`. `generate()` returns
+  parameter must handle `null`. `asset()` still returns `''` when `generate()`
+  returns `null`, for example for a missing source. `generate()` returns
   `['path' => null, 'disk' => null]` for such a request; `null` still means a
   failure. ([#21])
 
@@ -34,21 +40,31 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ### Upgrading
 - Existing entries keep their enlarged files, because the key and the filename do
   not change. `php artisan imagetools:regenerate --all` applies the new rule: an
-  entry above the source size gets `'path' => null`, and its enlarged file is
-  deleted. Entries without a recorded source are skipped. `imagetools:generate`
-  clears everything and rebuilds by the new rule, so a build pipeline that runs it
+  entry larger than the source gets `'path' => null`, and its enlarged file is
+  deleted. The command lists each such entry and counts it as
+  `larger than the source`. Entries without a recorded source are skipped.
+  `imagetools:generate` deletes the files that the manifest references and the
+  manifest itself, then rebuilds by the new rule. A build pipeline that runs it
   applies the rule on the next deploy. A later change to `allow_upscale` needs the
   same step. ([#21])
 - The enlarged file is deleted even when the manifest no longer holds its entry
   (a per-release `bootstrap/cache`). Pages cached before the run still point to
   the deleted files: clear full-page and CDN HTML caches after it, and reload
-  PHP-FPM when `opcache.validate_timestamps=0`. Restart long-lived processes
-  (`queue:restart`, `octane:reload`): they keep the manifest in memory. When several hosts keep their own
-  manifest on one shared output disk, run the command on each host. A delete
-  that the disk refuses is logged as a warning and does not fail the request. ([#21])
+  PHP-FPM when `opcache.validate_timestamps=0`. ([#21])
+- Restart long-lived processes (`queue:restart`, `octane:reload`) after the run:
+  they keep the manifest in memory. When several hosts keep their own manifest on
+  one shared output disk, run the command on each host. ([#21])
+- A delete that the disk refuses is logged as a warning and does not fail the
+  request. This covers a disk that throws and a disk whose `delete()` returns
+  `false` (the `'throw' => false` default). ([#21])
+- Writes create a lock file next to the manifest, by default
+  `bootstrap/cache/image-tools.php.lock`. The users that run the web server, the
+  queue workers and the deploy must be able to create it, or at least to open it
+  when it exists. Otherwise each write logs a warning and goes ahead without the
+  lock. ([#21])
 - A `null` entry stays `null` when its source is replaced by a larger image; run
   `imagetools:regenerate --all` after you replace a source. ([#21])
-- A queued request above the source size returns its URL before the worker reads
+- A queued request larger than the source returns its URL before the worker reads
   the source. The worker stores no file, so that URL returns 404; calls after the
   worker has run return `null`. ([#21])
 

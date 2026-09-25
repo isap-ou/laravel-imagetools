@@ -27,7 +27,7 @@ Deterministic, query‑driven image generation for Laravel — inspired by **vit
 - 🔎 **Scanner command** to pre‑generate all images referenced in your code
 - 🧹 **Clear command** to remove generated files & the manifest
 - ⏳ **Deferred generation** via a `queue` flag — defer heavy/responsive work to the queue
-- 🚫 **No upscaling** by default — a `w`/`h` request without `fit` above the source size returns `null` instead of an enlarged file
+- 🚫 **No upscaling** by default — a `w`/`h` request without `fit` larger than the source returns `null` instead of an enlarged file
 
 ## Requirements
 
@@ -110,7 +110,7 @@ IMAGE_TOOLS_QUEUE_UNIQUE_FOR=3600
 Key options:
 
 - **`disk`** — Laravel filesystem disk where processed files are written and served from (`public`, `s3`, `r2`, …).
-- **`allow_upscale`** — `false` by default: a resize by `w` or `h` above the source size stores no file, and `asset()` returns `null`. See [Larger than the source](#larger-than-the-source).
+- **`allow_upscale`** — `false` by default: a resize by `w` or `h` larger than the source stores no file, and `asset()` returns `null`. See [Larger than the source](#larger-than-the-source).
 - **`manifest_path`** — Path to the PHP manifest file that stores the mapping (relative paths resolve from the project base path).
 - **`blade_paths`** — Directories with Blade templates to scan for usages.
 - **`php_paths`** — Additional PHP directories to scan (controllers, services, etc.).
@@ -123,8 +123,8 @@ Key options:
 
 | Key      | Type       | Description                                                                                           |
 |:---------|:-----------|:------------------------------------------------------------------------------------------------------|
-| `w`      | `int`      | Target width (px). Without `fit` and above the source width, no file is stored — see [Larger than the source](#larger-than-the-source). |
-| `h`      | `int`      | Target height (px). Without `w` or `fit` and above the source height, no file is stored.              |
+| `w`      | `int`      | Target width (px). Without `fit` and greater than the source width, no file is stored — see [Larger than the source](#larger-than-the-source). |
+| `h`      | `int`      | Target height (px). Without `w` or `fit` and greater than the source height, no file is stored.       |
 | `fit`    | `enum`     | Geometry mode from `Spatie\Image\Enums\Fit` (e.g. `Contain`, `Fill`, `Max`, …). Requires `w` and `h`. |
 | `q`      | `int`      | Output quality (`1..100`).                                                                            |
 | `format` | `enum`     | Output format: `jpeg`, `png`, `gif`, `webp`, `avif`.                                                  |
@@ -142,6 +142,7 @@ entry and do not load the source again.
 
 - `w` counts when it is greater than the source width. `h` counts only without `w`,
   when it is greater than the source height. The size is measured after EXIF rotation.
+  GD applies that rotation only when `ext-exif` and `ext-fileinfo` are loaded.
 - `w` equal to the source width is not larger: it stores a file at the source size.
 - `fit` is not affected. For example, `fit=crop&w=1200&h=630` still produces 1200×630
   from a smaller source.
@@ -168,20 +169,21 @@ check before each candidate:
 />
 ```
 
-The `src` request has no `w`, so it is never larger than the source and always has
-a file. The package does not add a candidate at the source width: for a 1280px
-source, the list above keeps only `768w`. Add widths that match your sources if you
-need more.
+The `src` request has no `w`, so it is never larger than the source, and `asset()`
+never returns `null` for it. The package does not add a candidate at the source
+width: for a 1280px source, the list above keeps only `768w`. Add widths that match
+your sources if you need more.
 
 **Upgrading from 1.3 or earlier:** existing entries keep their enlarged files,
 because the key and the filename do not change. Two commands apply the rule:
 
 - `php artisan imagetools:regenerate --all` rebuilds every entry with a recorded
-  source. An entry above the source size gets `'path' => null`, and its enlarged
-  file is deleted. Entries without a recorded source are skipped.
-- `php artisan imagetools:generate` clears all generated files and the manifest,
-  then builds every request it finds in the code by the new rule. A build pipeline
-  that runs it applies the rule on the next deploy.
+  source. An entry larger than the source gets `'path' => null`, and its enlarged
+  file is deleted. The command lists each such entry and counts it as
+  `larger than the source`. Entries without a recorded source are skipped.
+- `php artisan imagetools:generate` deletes the files that the manifest references
+  and the manifest itself. Then it builds every request it finds in the code by the
+  new rule. A build pipeline that runs it applies the rule on the next deploy.
 
 The enlarged file is deleted even when the manifest no longer holds its entry, for
 example a per‑release `bootstrap/cache`. Pages cached before the run (full‑page
@@ -315,6 +317,11 @@ An entry with `'path' => null` is a request [larger than the source](#larger-tha
 It has no file by design, so it counts as healthy. `--all` rebuilds it by the current
 `allow_upscale` value.
 
+A rebuild that finds the request larger than the source prints
+`No file [<key>]: the request is larger than the source.` The summary counts it as
+`larger than the source`, not as `regenerated`. The exit status stays zero. A
+`--dry-run` rebuilds nothing, so it cannot find these entries.
+
 > Each write takes a lock on the manifest and starts from the file as it is on
 > disk, so an entry that a web request or a queue worker adds while the command
 > runs is kept. A long‑lived process no longer writes its old copy of the manifest
@@ -359,7 +366,7 @@ It has no file by design, so it counts as healthy. `--all` rebuilds it by the cu
 - **`width(): Argument #1 must be of type int`** — pass numeric values in the query (`w=640`, not `w=640px`).
 - **`fit` requires `w` and `h`** — when using `fit`, provide both dimensions.
 - **No URL / 404** — check the configured `disk` has a URL generator (`php artisan storage:link` for `public` disk).
-- **Empty `src` / `asset()` returns `null`** — the request asks for a `w` or `h` above the source size. See [Larger than the source](#larger-than-the-source): leave the candidate out, ask for a smaller size, or set `allow_upscale`. With `queue=1`, the first render gets a URL that stays a 404 for such a request.
+- **Empty `src` / `asset()` returns `null`** — the request asks for a `w` or `h` larger than the source. See [Larger than the source](#larger-than-the-source): leave the candidate out, ask for a smaller size, or set `allow_upscale`. With `queue=1`, the first render gets a URL that stays a 404 for such a request.
 
 ## Testing
 

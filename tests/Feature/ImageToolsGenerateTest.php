@@ -370,6 +370,27 @@ class ImageToolsGenerateTest extends TestCase
             ->once();
     }
 
+    public function test_a_delete_that_returns_false_is_logged(): void
+    {
+        File::delete(base_path('bootstrap/cache/image-tools.php'));
+
+        // The same disk with its 'throw' option off, the Laravel default: the refused
+        // delete comes back as false instead of an exception.
+        $disk = Mockery::mock(Filesystem::class);
+        $disk->shouldReceive('delete')->once()->andReturn(false);
+        Storage::set('public', $disk);
+
+        Log::spy();
+
+        $res = app(ImageTools::class)->generate('public/images/small.png?w=80');
+
+        $this->assertSame(['path' => null, 'disk' => null], $res);
+
+        Log::shouldHaveReceived('warning')
+            ->with('ImageTools: an old file could not be deleted.', Mockery::type('array'))
+            ->once();
+    }
+
     public function test_empty_encode_is_not_uploaded_and_does_not_touch_manifest(): void
     {
         $manifestFile = base_path('bootstrap/cache/image-tools.php');

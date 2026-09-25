@@ -75,7 +75,8 @@ ahead of time (scanner command), or on a queue.
   jobs, and its copy can be old. The lock must never make a write fail — it falls back to a
   read‑only handle, then to no lock with a warning.
 - A clean-up delete of an old file (`recordOversize()`) comes after the manifest write and never
-  fails the request: a refused delete is logged as a warning.
+  fails the request. A refused delete is logged as a warning, both when the disk throws and when
+  `delete()` returns `false` (a disk with `'throw' => false`, the Laravel default).
 
 ## Where to read more
 
