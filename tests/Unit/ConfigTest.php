@@ -15,4 +15,18 @@ class ConfigTest extends TestCase
 
         $this->assertFalse($config['allow_upscale']);
     }
+
+    public function test_generation_is_synchronous_by_default(): void
+    {
+        $config = require __DIR__ . '/../../config/image-tools.php';
+
+        $this->assertFalse($config['queue']);
+    }
+
+    public function test_a_queued_miss_falls_back_to_the_original_by_default(): void
+    {
+        $config = require __DIR__ . '/../../config/image-tools.php';
+
+        $this->assertSame('original', $config['queue_fallback']);
+    }
 }

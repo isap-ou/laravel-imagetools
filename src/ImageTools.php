@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace Isapp\ImageTools;
 
-use Illuminate\Support\Facades\Bus;
+use Illuminate\Bus\UniqueLock;
+use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -20,14 +21,17 @@ use Spatie\ImageOptimizer\OptimizerChain;
 use Spatie\ImageOptimizer\OptimizerChainFactory;
 use Spatie\ImageOptimizer\Optimizers\Cwebp;
 
+use function app;
 use function array_pad;
 use function basename;
 use function config;
+use function dispatch;
 use function explode;
 use function filter_var;
 use function parse_str;
 use function storage_path;
 use function str_ends_with;
+use function var_export;
 
 /**
  * ImageTools: deterministic, query‑driven image generator (vite‑imagetools‑like).
@@ -77,16 +81,29 @@ class ImageTools
     }
 
     /**
+     * Whether the manifest has an entry for a "path?query", after it reads a
+     * changed manifest file again. An entry with a null path counts.
+     */
+    public function has(string $path, string $manifest = 'default'): bool
+    {
+        $this->manifest->refresh($manifest);
+
+        return $this->manifest->has($manifest, $this->paths->seed($path, $this->sourceDisk));
+    }
+
+    /**
      * Return a public URL for a given "path?query". If the canonical key is
-     * missing in the manifest, generate the image first (or queue it) and return
-     * the URL.
+     * missing in the manifest, generate the image first (or queue it and return
+     * the 'queue_fallback' value) and return the URL.
      *
      * @param  string  $path  Source path with query (e.g., 'resources/img/hero.jpg?w=1200&format=webp')
      * @param  string  $manifest  Manifest namespace ('default' by default)
      * @return string|null null when the manifest entry has no file: the request is
-     *                     larger than the source and upscaling is off. '' when the
-     *                     namespace is unknown or generate() returns null. A query
-     *                     that fails validation or an image that cannot be read throws.
+     *                     larger than the source and upscaling is off; '' when the
+     *                     namespace is unknown, generate() returns null, or a queued
+     *                     miss has no fallback URL
+     *
+     * @throws \InvalidArgumentException for a queued miss with an unknown 'queue_fallback'
      */
     public function asset(string $path, string $manifest = 'default'): ?string
     {
@@ -98,17 +115,20 @@ class ImageTools
         $seed = $this->paths->seed($path, $this->sourceDisk);
 
         if (! $this->manifest->has($manifest, $seed)) {
-            // Deferred mode: when the request opts in via a truthy "queue" flag,
-            // push generation onto the queue and return the final, deterministic
-            // URL immediately. The file appears once the worker finishes. For a
-            // request larger than the source no file appears: the worker records
-            // a null path, and later calls return null.
+            // A queue worker may have written the entry since this process read the manifest.
+            $this->manifest->refresh($manifest);
+        }
+
+        if (! $this->manifest->has($manifest, $seed)) {
+            // Deferred mode: queue the job and return the fallback now. A sync
+            // connection and a failed dispatch take the synchronous path below.
             if ($this->shouldQueue($path)) {
-                $this->dispatchGeneration($path, $manifest);
+                // Checked first, so a wrong value fails on a sync connection (tests) too.
+                $fallback = $this->queueFallbackMode();
 
-                $info = $this->paths->storedFile($path, $this->sourceDisk);
-
-                return Storage::disk($info['disk'])->url($info['path']);
+                if (! $this->queueRunsInline() && $this->dispatchGeneration($path, $manifest)) {
+                    return $this->queuedFallback($path, $fallback);
+                }
             }
 
             if ($this->generate($path, $manifest) === null) {
@@ -386,24 +406,100 @@ class ImageTools
     }
 
     /**
-     * Whether the request opts into deferred (queued) generation via a truthy
-     * "queue" query flag, e.g. 'hero.jpg?w=1200&queue=1'. A control flag only:
-     * it is excluded from the seed, so it never affects the filename or key.
+     * Whether a miss is queued: the "queue" query flag when present, else the
+     * 'queue' config. A control flag only: it is excluded from the seed.
      */
     protected function shouldQueue(string $path): bool
     {
         [, $params] = array_pad(explode('?', $path, 2), 2, '');
         parse_str($params, $options);
 
-        return filter_var($options['queue'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if (\array_key_exists('queue', $options)) {
+            return filter_var($options['queue'], FILTER_VALIDATE_BOOLEAN);
+        }
+
+        return (bool) config('image-tools.queue', false);
+    }
+
+    /**
+     * The 'queue_fallback' config value; an unknown value throws.
+     */
+    protected function queueFallbackMode(): string
+    {
+        $fallback = config('image-tools.queue_fallback', 'original');
+
+        if (! \in_array($fallback, ['original', 'none', 'derivative'], true)) {
+            throw new \InvalidArgumentException(
+                'Unknown image-tools.queue_fallback ' . var_export($fallback, true) . '; use original, none or derivative.'
+            );
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * What asset() returns for a queued miss (see the 'queue_fallback' config).
+     */
+    protected function queuedFallback(string $path, string $fallback): string
+    {
+        [$filepath] = explode('?', $path, 2);
+
+        return match ($fallback) {
+            'original' => $this->source->publicUrl($filepath, $this->sourceDisk) ?? '',
+            'none' => '',
+            'derivative' => $this->storedFileUrl($path),
+        };
+    }
+
+    /**
+     * The URL of the derivative at its deterministic name, whether or not it exists yet.
+     */
+    protected function storedFileUrl(string $path): string
+    {
+        $info = $this->paths->storedFile($path, $this->sourceDisk);
+
+        return Storage::disk($info['disk'])->url($info['path']);
+    }
+
+    /**
+     * Whether the job's connection runs jobs in the request (the 'sync' driver).
+     */
+    protected function queueRunsInline(): bool
+    {
+        $connection = config('image-tools.queue_connection') ?: config('queue.default');
+
+        return config("queue.connections.{$connection}.driver") === 'sync';
     }
 
     /**
      * Dispatch a queued job that generates the derivative for the given path.
      * The source disk is carried along so the worker reads from the same origin.
+     * Returns false when the dispatch fails; the caller then generates in the request.
      */
-    protected function dispatchGeneration(string $path, string $manifest): void
+    protected function dispatchGeneration(string $path, string $manifest): bool
     {
-        Bus::dispatch(new GenerateImageJob($path, $manifest, $this->sourceDisk));
+        $job = new GenerateImageJob($path, $manifest, $this->sourceDisk);
+
+        try {
+            // The dispatch() helper takes the unique lock; Bus::dispatch() does not.
+            dispatch($job);
+        } catch (\Throwable $e) {
+            // Laravel keeps the unique lock when the push throws, which would block
+            // this seed for unique_for. A duplicate job is harmless: it checks has().
+            try {
+                (new UniqueLock(app(Cache::class)))->release($job);
+            } catch (\Throwable) {
+            }
+
+            Log::warning('ImageTools: the generation job could not be queued; the image is generated in the request.', [
+                'path' => $path,
+                'disk' => $this->sourceDisk,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        return true;
     }
 }

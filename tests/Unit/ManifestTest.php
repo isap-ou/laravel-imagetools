@@ -140,6 +140,73 @@ class ManifestTest extends TestCase
         return $free;
     }
 
+    public function test_refresh_reads_an_entry_that_another_process_wrote(): void
+    {
+        // A web process loads the manifest; a queue worker writes an entry afterwards.
+        $web = new Manifest($this->path);
+        (new Manifest($this->path))->put('default', 'a.png?w=8', $this->entry('a.png?w=8', 'image-tools/a.png'));
+
+        $this->assertFalse($web->has('default', 'a.png?w=8'));
+
+        $web->refresh('default');
+
+        $this->assertTrue($web->has('default', 'a.png?w=8'));
+    }
+
+    public function test_refresh_reads_the_file_when_load_got_an_older_copy(): void
+    {
+        $a = $this->entry('a.png?w=8', 'image-tools/a.png');
+        (new Manifest($this->path))->put('default', 'a.png?w=8', $a);
+        (new Manifest($this->path))->put('default', 'b.png?w=8', $this->entry('b.png?w=8', 'image-tools/b.png'));
+
+        // Under opcache (PHP-FPM with validate_timestamps=0), the `require` in load() can return
+        // a copy compiled before the last write. This subclass loads such an older copy.
+        $manifest = new class($this->path, ['a.png?w=8' => $a]) extends Manifest
+        {
+            public function __construct(string $path, private array $older)
+            {
+                parent::__construct($path);
+            }
+
+            public function load(?string $path = null): void
+            {
+                parent::load($path);
+
+                if ($path === null) {
+                    $this->namespaces['default'] = $this->older;
+                }
+            }
+        };
+
+        $this->assertFalse($manifest->has('default', 'b.png?w=8'));
+
+        $manifest->refresh('default');
+
+        $this->assertTrue($manifest->has('default', 'b.png?w=8'));
+    }
+
+    public function test_refresh_does_not_read_a_file_that_did_not_change(): void
+    {
+        (new Manifest($this->path))->put('default', 'a.png?w=8', $this->entry('a.png?w=8', 'image-tools/a.png'));
+
+        $manifest = new class($this->path) extends Manifest
+        {
+            public int $reads = 0;
+
+            protected function read(string $path): array
+            {
+                $this->reads++;
+
+                return parent::read($path);
+            }
+        };
+
+        $manifest->refresh('default');
+        $manifest->refresh('default');
+
+        $this->assertSame(0, $manifest->reads);
+    }
+
     public function test_clear_returns_the_entries_and_removes_the_file(): void
     {
         $entries = ['a.png?w=8' => $this->entry('a.png?w=8', 'image-tools/a.png')];

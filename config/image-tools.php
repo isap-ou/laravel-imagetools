@@ -86,14 +86,28 @@ return [
     | Queued Generation
     |--------------------------------------------------------------------------
     |
-    | When an ImageTools::asset() call includes a truthy "queue" query flag
-    | (e.g. 'hero.jpg?w=1200&queue=1') and the image has not been generated
-    | yet, the derivative is produced in a queued job instead of synchronously.
-    | asset() returns the final (deterministic) URL immediately; the file
-    | appears once the worker finishes. Handy for pages with many images.
-    | A request larger than the source (see allow_upscale) gets no file: that
-    | URL stays a 404, and calls after the worker has run return null.
+    | An ImageTools::asset() call whose image has not been generated yet can
+    | produce the derivative in a queued job instead of in the request. Pages
+    | with many new images then respond at once. asset() returns the
+    | 'queue_fallback' value for that render; a render after the worker has
+    | run gets the derivative. A request larger than the source (see
+    | allow_upscale) gets no file: later calls return null for it.
     |
+    | - queue:            queue every miss, with no flag in the query (default
+    |                     false). A "queue" query flag overrides it per call:
+    |                     'queue=1' queues, 'queue=0' generates in the request.
+    | - queue_fallback:   what asset() returns for a queued miss:
+    |                     'original'   — the public URL of the unprocessed
+    |                                    source, or '' when it has none (a
+    |                                    local file outside public/);
+    |                     'none'       — '';
+    |                     'derivative' — the URL of the derivative, a 404
+    |                                    until the worker is done.
+    |                     'original' puts the source's URL (host, bucket, file
+    |                     name) into the HTML and links the full-size file with
+    |                     its metadata. Use 'none' or 'derivative' for private
+    |                     sources and user uploads. The web and the workers must
+    |                     read one manifest file, or the page keeps the original.
     | - queue_connection: connection to dispatch the job on. Falls back to the
     |                     app's default queue connection (QUEUE_CONNECTION).
     | - queue_name:       queue to dispatch the job on (defaults to 'default').
@@ -102,6 +116,10 @@ return [
     |                     Requires a cache store with atomic locks
     |                     (file, redis, database, memcached, …).
     */
+    'queue' => (bool) env('IMAGE_TOOLS_QUEUE', false),
+
+    'queue_fallback' => env('IMAGE_TOOLS_QUEUE_FALLBACK', 'original'),
+
     'queue_connection' => env('IMAGE_TOOLS_QUEUE_CONNECTION', env('QUEUE_CONNECTION')),
 
     'queue_name' => env('IMAGE_TOOLS_QUEUE_NAME', 'default'),

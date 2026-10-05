@@ -28,6 +28,8 @@ class TestCase extends BaseTestCase
             'manifest_path' => 'bootstrap/cache/image-tools.php',
             'blade_paths' => [],
             'php_paths' => [],
+            'queue' => false,
+            'queue_fallback' => 'original',
             'queue_connection' => null,
             'queue_name' => null,
             'unique_for' => 3600,

@@ -27,10 +27,11 @@ ahead of time (scanner command), or on a queue.
 
 - `src/ImageTools.php` — the orchestrator (`asset()`, `generate()`, `disk()`, queued
   dispatch). Depends on three injected collaborators in `src/Support/`:
-  - `Support/Manifest.php` — the PHP manifest state + persistence (load/has/get/put/clear;
+  - `Support/Manifest.php` — the PHP manifest state + persistence (load/has/get/put/clear/refresh;
     writes take the `<manifest>.lock` lock).
   - `Support/PathResolver.php` — canonical `seed()` and the deterministic `storedFile()`.
-  - `Support/SourceReader.php` — resolves a source to a local path (local or disk→temp).
+  - `Support/SourceReader.php` — resolves a source to a local path (local or disk→temp), and
+    gives its public URL (`publicUrl()`, the `original` fallback of a queued miss).
   Wiring lives in `src/ServiceProvider.php` (`Manifest` is bound with its config path; the
   rest auto‑resolve).
 - `src/Jobs/GenerateImageJob.php` — queued generation (`ShouldQueue` + `ShouldBeUnique`).
@@ -61,7 +62,15 @@ ahead of time (scanner command), or on a queue.
 - The **source disk** (set via `disk()`) is folded into the seed so the same path read from
   different disks never collides; it is used only as a key/hash input, never parsed as a path.
 - Default (non‑queued, local‑source) behaviour stays fully **synchronous**; only the `queue` flag
-  defers generation.
+  or the `queue` config defers generation. A queued miss dispatches through the `dispatch()`
+  helper, never `Bus::dispatch()`: only the helper takes the `ShouldBeUnique` lock, which is the
+  one "pending" state. The job's unique id is a hash (fixed key length), and a failed push
+  releases the lock. A `sync` connection and a failed dispatch generate in the request. A job
+  returns before it encodes when its entry exists already (`ImageTools::has()`).
+- On a manifest miss, `asset()` calls `Manifest::refresh()` once. It is read only — never a write.
+  `load()` records no signature, because its `require` can return an older opcache copy: the
+  first `refresh()` compares the file size with the text `put()` would write for the copy in
+  memory, and later calls compare the file's signature (inode, mtime, size).
 - A manifest entry records the `source` and `source_disk` it was built from. `imagetools:regenerate`
   rebuilds from those recorded values — the seed in the key is never parsed back into a path and a
   disk. The command also never deletes the manifest or an entry.
