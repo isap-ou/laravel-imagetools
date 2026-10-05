@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ### Fixed
 - `GenerateImageJob` was never unique. `Bus::dispatch()` skips the
   `ShouldBeUnique` lock, so each render of a pending image queued the job
-  again. The job is now dispatched through the `dispatch()` helper, and its
+  again. The job is now dispatched with `GenerateImageJob::dispatch()`, and its
   unique key is a hash of the canonical seed: `?w=800&queue=1` and
   `?queue=1&w=800` share one lock, and the key fits a database cache store.
   A push that fails releases the lock. A `unique_for` of 0 or less falls back

@@ -62,9 +62,9 @@ ahead of time (scanner command), or on a queue.
 - The **source disk** (set via `disk()`) is folded into the seed so the same path read from
   different disks never collides; it is used only as a key/hash input, never parsed as a path.
 - Default (non‑queued, local‑source) behaviour stays fully **synchronous**; only the `queue` flag
-  or the `queue` config defers generation. A queued miss dispatches through the `dispatch()`
-  helper, never `Bus::dispatch()`: only the helper takes the `ShouldBeUnique` lock, which is the
-  one "pending" state. The job's unique id is a hash (fixed key length), and a failed push
+  or the `queue` config defers generation. A queued miss dispatches through
+  `GenerateImageJob::dispatch()` (a `PendingDispatch`), never `Bus::dispatch()`: only a
+  `PendingDispatch` takes the `ShouldBeUnique` lock, which is the one "pending" state. The job's unique id is a hash (fixed key length), and a failed push
   releases the lock. A `sync` connection and a failed dispatch generate in the request. A job
   returns before it encodes when its entry exists already (`ImageTools::has()`).
 - On a manifest miss, `asset()` calls `Manifest::refresh()` once. It is read only — never a write.

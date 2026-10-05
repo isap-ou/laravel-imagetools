@@ -25,7 +25,6 @@ use function app;
 use function array_pad;
 use function basename;
 use function config;
-use function dispatch;
 use function explode;
 use function filter_var;
 use function parse_str;
@@ -478,16 +477,15 @@ class ImageTools
      */
     protected function dispatchGeneration(string $path, string $manifest): bool
     {
-        $job = new GenerateImageJob($path, $manifest, $this->sourceDisk);
-
         try {
-            // The dispatch() helper takes the unique lock; Bus::dispatch() does not.
-            dispatch($job);
+            // The PendingDispatch takes the unique lock and pushes the job when it is
+            // destroyed, at the end of this statement. Bus::dispatch() skips the lock.
+            GenerateImageJob::dispatch($path, $manifest, $this->sourceDisk);
         } catch (\Throwable $e) {
             // Laravel keeps the unique lock when the push throws, which would block
             // this seed for unique_for. A duplicate job is harmless: it checks has().
             try {
-                (new UniqueLock(app(Cache::class)))->release($job);
+                (new UniqueLock(app(Cache::class)))->release(new GenerateImageJob($path, $manifest, $this->sourceDisk));
             } catch (\Throwable) {
             }
 

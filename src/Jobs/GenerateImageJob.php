@@ -7,6 +7,7 @@ namespace Isapp\ImageTools\Jobs;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Support\Facades\Log;
 use Isapp\ImageTools\Support\PathResolver;
 
@@ -24,6 +25,7 @@ use function sha1;
  */
 class GenerateImageJob implements ShouldBeUnique, ShouldQueue
 {
+    use Dispatchable;
     use Queueable;
 
     public function __construct(

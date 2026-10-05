@@ -55,8 +55,8 @@ render gets the derivative.
   - A local source: a URL only when it is a file (not a directory) under `public_path()`; the
     URL is the path relative to `public_path()`, with empty segments dropped and each segment
     `rawurlencode`d, through Laravel's `asset()` helper. Any other local path returns `null`.
-- **FR-4** `dispatchGeneration()` dispatches through the `dispatch()` helper
-  (`PendingDispatch`), so the `ShouldBeUnique` lock is taken. While a job for a seed is pending
+- **FR-4** `dispatchGeneration()` dispatches with `GenerateImageJob::dispatch()` (the job uses
+  `Dispatchable`; it returns a `PendingDispatch`), so the `ShouldBeUnique` lock is taken. While a job for a seed is pending
   or running, a later miss queues nothing and returns the fallback again. Laravel releases the
   lock when the job ends or fails (`CallQueuedHandler.php:73, 349`); `unique_for` limits a lock
   that is lost. *(Amended after review.)* The job's unique id is
