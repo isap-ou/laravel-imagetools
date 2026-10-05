@@ -9,7 +9,8 @@
 Key ideas: the query string (`w`, `h`, `fit`, `q`, `format`) is canonicalized — reduced to
 those keys and sorted — into a "seed" that yields deterministic filenames and manifest keys.
 Generation runs on demand, ahead of time via a scanner command, or deferred to the queue
-with a `queue` flag. Works with any Laravel disk (public, S3/R2). By default a resize by
+with a `queue` flag or the `queue` config; a queued miss returns the original's URL until a
+worker has made the derivative (`queue_fallback`). Works with any Laravel disk (public, S3/R2). By default a resize by
 `w` or `h` without `fit` never enlarges a smaller source: that request stores no file, and
 `asset()` returns `null`.
 

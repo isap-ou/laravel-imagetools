@@ -26,7 +26,7 @@ Deterministic, query‑driven image generation for Laravel — inspired by **vit
 - 📦 **One disk to rule them all** — works with `public`, S3/R2 or any Laravel disk
 - 🔎 **Scanner command** to pre‑generate all images referenced in your code
 - 🧹 **Clear command** to remove generated files & the manifest
-- ⏳ **Deferred generation** via a `queue` flag — defer heavy/responsive work to the queue
+- ⏳ **Deferred generation** via a `queue` flag or config — the page responds at once and shows the original (when it has a public URL) until a worker has made the derivative
 - 🚫 **No upscaling** by default — a `w`/`h` request without `fit` larger than the source returns `null` instead of an enlarged file
 
 ## Requirements
@@ -102,6 +102,8 @@ IMAGE_TOOLS_BLADE_PATHS=resources/views,modules/*/resources/views
 IMAGE_TOOLS_PHP_PATHS=app,modules
 
 # Deferred generation (optional)
+IMAGE_TOOLS_QUEUE=true               # queue every miss; defaults to false
+IMAGE_TOOLS_QUEUE_FALLBACK=original  # original | none | derivative
 IMAGE_TOOLS_QUEUE_CONNECTION=redis   # defaults to QUEUE_CONNECTION
 IMAGE_TOOLS_QUEUE_NAME=images        # defaults to "default"
 IMAGE_TOOLS_QUEUE_UNIQUE_FOR=3600
@@ -114,6 +116,7 @@ Key options:
 - **`manifest_path`** — Path to the PHP manifest file that stores the mapping (relative paths resolve from the project base path).
 - **`blade_paths`** — Directories with Blade templates to scan for usages.
 - **`php_paths`** — Additional PHP directories to scan (controllers, services, etc.).
+- **`queue`**, **`queue_fallback`** — generate misses in a queued job, and choose what the first render gets. See [Deferred (queued) generation](#deferred-queued-generation).
 
 > The request is **canonicalized**: query keys are sorted before hashing, so `?h=630&w=1200` equals `?w=1200&h=630`.
 
@@ -202,34 +205,94 @@ key does not change, so nothing reads the source again. Run
 
 ## Deferred (queued) generation
 
-On a page with many images — especially responsive `srcset` with several widths
-— generating them all on the first request can be slow. Add a truthy **`queue`**
-flag to defer generation to the queue:
+On a page with many new images — especially a responsive `srcset` with several
+widths — generating them all in the first request is slow, and the request can
+time out. Queued mode moves the encode to a worker, so the page responds at once.
+
+Turn it on for every call in the config:
+
+```dotenv
+IMAGE_TOOLS_QUEUE=true
+```
+
+A **`queue`** flag in the query overrides the config for one call, in both directions:
 
 ```blade
 <img src="{{ ImageTools::asset('public/images/hero.jpg?w=1200&format=webp&queue=1') }}">
+{{-- Generated in the request, even when the config queues: --}}
+<img src="{{ ImageTools::asset('public/images/logo.png?w=200&queue=0') }}">
 ```
 
-When the image hasn't been generated yet:
+When the image has not been generated yet:
 
-- `asset()` returns the **final, deterministic URL immediately** (filenames are a
-  hash of the source + options, so the URL is known before the file exists).
-- A `GenerateImageJob` is dispatched to the queue; the file appears once a worker
-  processes it. Until then the URL 404s — make sure a worker is running
-  (`php artisan queue:work`).
+- A `GenerateImageJob` is dispatched. Make sure a worker runs
+  (`php artisan queue:work`, or Horizon).
+- `asset()` returns the **`queue_fallback`** value for this render:
+
+  | Value                | `asset()` returns                                                                                                                                                   |
+  |:---------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+  | `original` (default) | The public URL of the unprocessed source. A disk source gets the URL of its disk. A local file gets a URL only when it is under `public/`; any other file gets `''`. |
+  | `none`               | `''`. The first visitor sees no image.                                                                                                                              |
+  | `derivative`         | The URL of the derivative. It returns 404 until the worker is done (the behaviour of `queue=1` in 1.4 and earlier).                                                 |
+
+- A render after the worker has run gets the derivative.
+- All widths of one source share one original URL, so the browser downloads it once.
+
+The job is **unique** per derivative (`ShouldBeUnique`, keyed on the canonical
+seed). While it is pending, later renders queue nothing and get the fallback
+again. This requires a cache store that supports atomic locks (`file`, `redis`,
+`database`, `memcached`, …).
+
+Things to know:
+
+- A connection with the `sync` driver runs a job in the request. A queued miss on
+  such a connection is generated in the request, and `asset()` returns the real
+  result. In tests with `QUEUE_CONNECTION=sync`, `Bus::fake()` therefore sees no
+  dispatch.
+- When the dispatch fails (for example, the queue backend is down), `asset()` logs
+  a warning and generates in the request. The page is slow, but it does not fail.
+- When a job cannot generate the image (for example, the source is missing), it
+  logs a warning. The next render queues it again.
+- The query is checked in the worker, not in the request. A query that fails
+  validation (`w=640px`, `fit` without `h`), or an encode that takes longer than
+  the worker's `--timeout`, fails the job. Each later render queues it again, and
+  the failures show in `failed_jobs`, not on the page. Give the worker a
+  `--timeout` that fits your largest source.
+- The web processes and the workers must read **one manifest file**. On a miss,
+  `asset()` reads the file again when it changed, so a worker's entry reaches
+  PHP-FPM (also with `opcache.validate_timestamps=0`) and long-lived processes.
+  When the workers run on another host with their own manifest, the web never
+  sees their entries: the page shows the original with no end, and each render
+  queues the image again. Put `manifest_path` on shared storage, or set
+  `queue_fallback` to `derivative`.
+- Output that is rendered once keeps the fallback: a queued mail or
+  notification, and HTML in a full‑page or CDN cache. Use `queue=0` for those
+  calls, or pre‑generate the images.
 - For a request [larger than the source](#larger-than-the-source), `asset()` cannot
-  know this before the worker reads the source. The worker stores no file, so the
-  URL from the first render stays a 404. Calls after the worker has run return `null`.
-
-The job is **unique** per derivative (`ShouldBeUnique`), so many concurrent page
-renders of the same not-yet-generated image collapse into a single job instead of
-a storm of duplicates. This requires a cache store that supports atomic locks
-(`file`, `redis`, `database`, `memcached`, …).
+  know this before the worker reads the source. With `original`, the first render
+  shows the original. The worker stores no file, and later renders return `null`.
+- Inside `<picture>`, a `<source type="image/avif">` or `type="image/webp"` gets the
+  original URL too. The browser picks the `<source>` by its `type`, receives a JPEG
+  or PNG, and shows it (checked in Chromium). A format that browsers cannot show,
+  such as HEIC or TIFF, shows as a broken image until the worker is done.
+- `original` puts the URL of the source into the HTML: the host, the bucket, the
+  directories and the file name. For a source that is readable but linked
+  nowhere, it links the full‑size file, with its metadata (EXIF, GPS). Use `none`
+  or `derivative` for private sources and user uploads.
+- A private disk (for example, a private S3 bucket), or a disk without a `url`
+  (such as Laravel's `local` disk), gives a URL that does not show the image
+  (403 or 404). With `original`, such an image is broken until the worker is
+  done.
+- A path with a `..` segment gets no original URL (`''`), because a browser would
+  resolve it to the parent directory. The worker can still make the derivative.
+- A job checks the manifest before it encodes. When the entry exists already
+  (another job, or a web process that saw an old copy), the job ends at once.
 
 Configuration (all optional — see `config/image-tools.php`):
 
-- **`queue_connection`** — falls back to `QUEUE_CONNECTION`. If that resolves to
-  `sync`, the job runs inline (no real deferral) — expected Laravel behaviour.
+- **`queue`** — queue every miss (default `false`).
+- **`queue_fallback`** — `original` (default), `none` or `derivative`; see the table above.
+- **`queue_connection`** — falls back to `QUEUE_CONNECTION`.
 - **`queue_name`** — queue to dispatch on (default `"default"`).
 - **`unique_for`** — seconds the uniqueness lock is held (default `3600`).
 
@@ -262,9 +325,11 @@ ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200&format=webp');
 - The **output** disk is still `config('image-tools.disk')`; `disk()` only changes
   where the *source* is read from.
 
-> The scanner command detects plain `ImageTools::asset('…')` calls; the fluent
-> `disk('…')->asset('…')` form is generated on demand (or via the queue), not
-> pre-discovered at build time.
+> The scanner command (`imagetools:generate`) finds the `disk('…')` form when the
+> disk name is a literal string: `ImageTools::disk('s3')->asset('…')` and
+> `app('image-tools')->disk('s3')->asset('…')`. It does not find a disk from a
+> variable (`disk($name)`) or a path built at runtime. Those images are generated
+> on demand, or in the queue.
 
 ## Commands
 
@@ -280,6 +345,7 @@ The scanner looks into `config('image-tools.blade_paths')` and `config('image-to
 
 - `ImageTools::asset('…')`
 - Container‑resolved calls (e.g. `app(ImageTools::class)->asset('…')`, `app('image-tools')->asset('…')`, `App::make(...)->asset('…')`)
+- The same calls scoped to a source disk with a literal name (e.g. `ImageTools::disk('s3')->asset('…')`, `app('image-tools')->disk('s3')->asset('…')`)
 
 ### Clear generated files
 
@@ -366,7 +432,8 @@ A rebuild that finds the request larger than the source prints
 - **`width(): Argument #1 must be of type int`** — pass numeric values in the query (`w=640`, not `w=640px`).
 - **`fit` requires `w` and `h`** — when using `fit`, provide both dimensions.
 - **No URL / 404** — check the configured `disk` has a URL generator (`php artisan storage:link` for `public` disk).
-- **Empty `src` / `asset()` returns `null`** — the request asks for a `w` or `h` larger than the source. See [Larger than the source](#larger-than-the-source): leave the candidate out, ask for a smaller size, or set `allow_upscale`. With `queue=1`, the first render gets a URL that stays a 404 for such a request.
+- **Empty `src` / `asset()` returns `null`** — the request asks for a `w` or `h` larger than the source. See [Larger than the source](#larger-than-the-source): leave the candidate out, ask for a smaller size, or set `allow_upscale`. In queued mode, the first render gets the `queue_fallback` value for such a request, and the renders after the worker has run get `null`.
+- **Empty `src` on the first render in queued mode** — `queue_fallback` is `none`, or it is `original` and the source has no public URL (a local file outside `public/`). See [Deferred (queued) generation](#deferred-queued-generation).
 
 ## Testing
 

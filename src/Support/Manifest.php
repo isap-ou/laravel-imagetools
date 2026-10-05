@@ -11,9 +11,11 @@ use Illuminate\Support\Facades\Log;
 use function app;
 use function clearstatcache;
 use function fclose;
+use function filesize;
 use function flock;
 use function fopen;
 use function realpath;
+use function stat;
 use function var_export;
 
 /**
@@ -24,6 +26,9 @@ class Manifest
 {
     /** @var array<string, array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}>> */
     protected array $namespaces = ['default' => []];
+
+    /** @var array<string, string|null> File signature per namespace; see refresh(). */
+    protected array $signatures = [];
 
     public function __construct(protected string $path)
     {
@@ -50,6 +55,35 @@ class Manifest
         }
 
         $this->namespaces['default'] = require $this->path;
+    }
+
+    /**
+     * Read a namespace's file again when another process (a queue worker) has
+     * changed it since this process read or wrote it. Read only.
+     */
+    public function refresh(string $namespace = 'default'): void
+    {
+        if (! $this->exists($namespace)) {
+            return;
+        }
+
+        $path = $this->pathFor($namespace);
+        $signature = $this->signature($path);
+
+        if (\array_key_exists($namespace, $this->signatures)) {
+            if ($signature === $this->signatures[$namespace]) {
+                return;
+            }
+        } elseif ($this->matchesFile($namespace, $path)) {
+            // load() records no signature: under opcache (validate_timestamps=0)
+            // its `require` can return a copy compiled before the last write.
+            $this->signatures[$namespace] = $signature;
+
+            return;
+        }
+
+        $this->signatures[$namespace] = $signature;
+        $this->namespaces[$namespace] = $this->read($path);
     }
 
     public function exists(string $namespace): bool
@@ -100,13 +134,13 @@ class Manifest
             $this->namespaces[$namespace] = $this->read($path);
             $this->namespaces[$namespace][$key] = $info;
 
-            $contents = "<?php\n\nreturn " . var_export($this->namespaces[$namespace], true) . ";\n";
-
-            app(Filesystem::class)->replace($path, $contents);
+            app(Filesystem::class)->replace($path, $this->render($this->namespaces[$namespace]));
 
             if (\function_exists('opcache_invalidate')) {
                 @opcache_invalidate($path, true);
             }
+
+            $this->signatures[$namespace] = $this->signature($path);
         } finally {
             $this->unlock($lock);
         }
@@ -133,6 +167,7 @@ class Manifest
             }
 
             $this->namespaces['default'] = [];
+            $this->signatures['default'] = null;
 
             return $entries;
         } finally {
@@ -215,5 +250,43 @@ class Manifest
         }
 
         return require $path;
+    }
+
+    /**
+     * Inode, mtime and size of a file (a write replaces the file, so the inode
+     * changes), or null when it does not exist.
+     */
+    protected function signature(string $path): ?string
+    {
+        clearstatcache(true, $path);
+
+        $stat = @stat($path);
+
+        return $stat === false ? null : $stat['ino'] . ':' . $stat['mtime'] . ':' . $stat['size'];
+    }
+
+    /**
+     * Whether the copy in memory is the file's content: the file's size equals
+     * the length of the text put() would write for the copy.
+     */
+    protected function matchesFile(string $namespace, string $path): bool
+    {
+        clearstatcache(true, $path);
+
+        $size = @filesize($path);
+
+        if ($size === false) {
+            return $this->namespaces[$namespace] === [];
+        }
+
+        return $size === \strlen($this->render($this->namespaces[$namespace]));
+    }
+
+    /**
+     * @param  array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}>  $entries
+     */
+    protected function render(array $entries): string
+    {
+        return "<?php\n\nreturn " . var_export($entries, true) . ";\n";
     }
 }

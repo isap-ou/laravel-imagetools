@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+- `queue` config key (`IMAGE_TOOLS_QUEUE`, default `false`). When it is `true`,
+  every `asset()` miss is generated in a queued job, with no flag in the query.
+  A `queue` flag still overrides it per call: `queue=1` queues, `queue=0`
+  generates in the request. ([#15])
+- `queue_fallback` config key (`IMAGE_TOOLS_QUEUE_FALLBACK`, default
+  `original`). It sets what `asset()` returns for a queued miss: `original` —
+  the public URL of the unprocessed source, or `''` when it has none; `none` —
+  `''`; `derivative` — the URL of the derivative, a 404 until the worker is
+  done. Any other value throws before the job is queued. ([#15])
+- `Manifest::refresh()` reads a manifest file again when it changed since this
+  process read or wrote it. On a miss, `asset()` calls it once, so an entry that
+  a worker wrote reaches PHP-FPM (also with `opcache.validate_timestamps=0`) and
+  long-lived processes without a reload. ([#15])
+- `ImageTools::has($path)` says whether the manifest has an entry for a request,
+  after it reads a changed manifest again. A queued job uses it and returns
+  before it encodes when its entry exists already. ([#15])
+
+### Changed
+- A queued miss returns the original's URL now, not the derivative's. A local
+  source outside `public/` has no URL, so it returns `''`. Set
+  `queue_fallback` to `derivative` for the old result. ([#15])
+- `original` puts the source's URL (host, bucket, file name) into the HTML and
+  links the full-size file with its metadata. For private sources and user
+  uploads, set `queue_fallback` to `none` or `derivative`. Queued mode also needs
+  one manifest file that the web and the workers share. ([#15])
+- A queued miss on a connection with the `sync` driver is generated in the
+  request, and `asset()` returns the real result. A test that uses
+  `Bus::fake()` with `QUEUE_CONNECTION=sync` therefore sees no dispatch; set a
+  queueing connection in `image-tools.queue_connection` for such a test. ([#15])
+- When the dispatch of the job fails, `asset()` logs a warning and generates in
+  the request, instead of throwing. ([#15])
+
+### Fixed
+- `GenerateImageJob` was never unique. `Bus::dispatch()` skips the
+  `ShouldBeUnique` lock, so each render of a pending image queued the job
+  again. The job is now dispatched with `GenerateImageJob::dispatch()`, and its
+  unique key is a hash of the canonical seed: `?w=800&queue=1` and
+  `?queue=1&w=800` share one lock, and the key fits a database cache store.
+  A push that fails releases the lock. A `unique_for` of 0 or less falls back
+  to 3600 seconds, because a lock of 0 seconds never expires on Redis. ([#15])
+- A queued job that could not generate its image (for example, a missing
+  source) ended without a trace. It now logs a warning. ([#15])
+
 ## [1.4.0] — 2026-09-25
 
 ### Added
@@ -172,5 +216,6 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 [#9]: https://github.com/isap-ou/laravel-imagetools/pull/9
 [#12]: https://github.com/isap-ou/laravel-imagetools/pull/12
 [#14]: https://github.com/isap-ou/laravel-imagetools/issues/14
+[#15]: https://github.com/isap-ou/laravel-imagetools/issues/15
 [#16]: https://github.com/isap-ou/laravel-imagetools/pull/16
 [#21]: https://github.com/isap-ou/laravel-imagetools/issues/21

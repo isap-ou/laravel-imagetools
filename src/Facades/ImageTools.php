@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static void loadManifest(?string $path = null)
  * @method static array{path: string|null, disk: string|null}|null generate(string $path, string $manifest = 'default')
  * @method static string|null asset(string $path, string $manifest = 'default')
+ * @method static bool has(string $path, string $manifest = 'default')
  */
 class ImageTools extends Facade
 {
