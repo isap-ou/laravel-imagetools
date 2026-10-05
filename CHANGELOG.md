@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-10-05
+
 ### Added
 - `queue` config key (`IMAGE_TOOLS_QUEUE`, default `false`). When it is `true`,
   every `asset()` miss is generated in a queued job, with no flag in the query.
@@ -197,7 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ## [1.0.0] — 2025-11-05
 - Initial release.
 
-[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.4.0...main
+[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.5.0...main
+[1.5.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.5.0
 [1.4.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.4.0
 [1.3.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.3.0
 [1.2.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.2.0
