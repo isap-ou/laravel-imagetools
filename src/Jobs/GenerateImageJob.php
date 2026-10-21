@@ -28,11 +28,21 @@ class GenerateImageJob implements ShouldBeUnique, ShouldQueue
     use Dispatchable;
     use Queueable;
 
+    /**
+     * Key of the medialibrary Media (see ImageTools::media()). Not promoted: a
+     * promoted property has no default of its own, so a job that 1.5 queued
+     * (its payload has no mediaId) would be uninitialized after unserialize().
+     */
+    public int|string|null $mediaId = null;
+
     public function __construct(
         public string $path,
         public string $manifest = 'default',
         public ?string $sourceDisk = null,
+        int|string|null $mediaId = null,
     ) {
+        $this->mediaId = $mediaId;
+
         $this->onConnection(config('image-tools.queue_connection'));
         $this->onQueue(config('image-tools.queue_name'));
     }
@@ -43,6 +53,11 @@ class GenerateImageJob implements ShouldBeUnique, ShouldQueue
 
         if ($this->sourceDisk !== null && $this->sourceDisk !== '') {
             $imageTools = $imageTools->disk($this->sourceDisk);
+        }
+
+        // A media() miss records its Media key; the key is not part of the unique id.
+        if ($this->mediaId !== null) {
+            $imageTools = $imageTools->withMediaId($this->mediaId);
         }
 
         // Another job or a request may have made the entry since this job was queued.

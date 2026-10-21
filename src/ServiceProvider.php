@@ -7,6 +7,7 @@ namespace Isapp\ImageTools;
 use Illuminate\Foundation\Application;
 use Isapp\ImageTools\Commands\ClearGeneratedImagesCommand;
 use Isapp\ImageTools\Commands\GenerateImagesCommand;
+use Isapp\ImageTools\Commands\PruneImagesCommand;
 use Isapp\ImageTools\Commands\RegenerateImagesCommand;
 use Isapp\ImageTools\Support\Manifest;
 
@@ -37,6 +38,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 GenerateImagesCommand::class,
                 ClearGeneratedImagesCommand::class,
                 RegenerateImagesCommand::class,
+                PruneImagesCommand::class,
             ]);
         }
 

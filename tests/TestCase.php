@@ -24,6 +24,9 @@ class TestCase extends BaseTestCase
     {
         Config::set('image-tools', [
             'disk' => 'public',
+            'driver' => null,
+            'optimizers' => null,
+            'put_options' => [],
             'allow_upscale' => false,
             'manifest_path' => 'bootstrap/cache/image-tools.php',
             'blade_paths' => [],

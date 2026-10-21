@@ -27,8 +27,8 @@ ahead of time (scanner command), or on a queue.
 
 - `src/ImageTools.php` — the orchestrator (`asset()`, `generate()`, `disk()`, queued
   dispatch). Depends on three injected collaborators in `src/Support/`:
-  - `Support/Manifest.php` — the PHP manifest state + persistence (load/has/get/put/clear/refresh;
-    writes take the `<manifest>.lock` lock).
+  - `Support/Manifest.php` — the PHP manifest state + persistence (load/has/get/put/putIfAbsent/
+    clear/refresh/whileLocked; writes take the `<manifest>.lock` lock).
   - `Support/PathResolver.php` — canonical `seed()` and the deterministic `storedFile()`.
   - `Support/SourceReader.php` — resolves a source to a local path (local or disk→temp), and
     gives its public URL (`publicUrl()`, the `original` fallback of a queued miss).
@@ -38,7 +38,9 @@ ahead of time (scanner command), or on a queue.
 - `src/Commands/GenerateImagesCommand.php` — scans Blade/PHP (nikic/php-parser) and
   pre‑generates; `src/Commands/ClearGeneratedImagesCommand.php` — removes generated files
   and the manifest; `src/Commands/RegenerateImagesCommand.php` — rebuilds entries whose
-  stored file is missing or empty, from the source each entry records.
+  stored file is missing or empty, from the source each entry records;
+  `src/Commands/PruneImagesCommand.php` — deletes generated files that no entry of the default
+  manifest references.
 - `src/Facades/ImageTools.php`, `src/ServiceProvider.php`, `config/image-tools.php`.
 - `tests/` — Feature + Unit (Testbench `TestCase`).
 
@@ -54,7 +56,9 @@ ahead of time (scanner command), or on a queue.
 ## Invariants — do not break
 
 - The manifest key **and** the generated filename both derive from one canonical "seed":
-  the query reduced to the supported keys (`w, h, q, fit, format, lossless`), sorted. `asset()`
+  the query reduced to the supported keys (`w, h, q, fit, format, lossless, optimize`), sorted.
+  `lossless` is kept only when on and `optimize` only when off (as `0`), so a switch at its
+  default never changes a filename. `asset()`
   (read path) and `generate()` (write path) MUST use the same derivation — both go through
   `PathResolver::seed()` / `storedFile()`. Divergence causes cache misses and broken URLs.
 - `queue` is a **control flag**, deliberately excluded from the seed, so it never affects
@@ -86,6 +90,30 @@ ahead of time (scanner command), or on a queue.
 - A clean-up delete of an old file (`recordOversize()`) comes after the manifest write and never
   fails the request. A refused delete is logged as a warning, both when the disk throws and when
   `delete()` returns `false` (a disk with `'throw' => false`, the Laravel default).
+- `driver`, `optimizers`, `put_options` and `media_id` are never part of the seed. `media()` is
+  `disk($media->disk)->asset(...)` plus a recorded `media_id`; every entry write goes through
+  `ImageTools::entry()`, and the job and `imagetools:regenerate` carry the id along.
+- On a miss, `generate()` adopts a non-empty file at the stored name only through
+  `Manifest::putIfAbsent()`: the file check and the write share the lock, and only when the file
+  has no entry. A first check runs without the lock, so a real miss never holds it during disk
+  calls. The source size check runs first. An entry that exists is always encoded again. A disk
+  that cannot answer the check (`FilesystemException`) means "not stored": log, then encode.
+- `asset()` catches a `Throwable` from the in-request `generate()`, reports it, logs a warning with
+  the path and the disk (Laravel does not report a `ValidationException`) and returns `''`.
+  `generate()`, the job and the commands still throw.
+- `GenerateImageJob::$mediaId` is a plain property with a default, not a promoted one: a payload
+  queued by an older version has no `mediaId`, and `unserialize()` never runs the constructor.
+- Every delete of a generated file by a command runs inside `whileLocked()`, after the manifest is
+  read again, and skips a file that an entry references again. This holds for `imagetools:prune`
+  and `imagetools:clear`. Clear falls back to an unlocked delete only when the lock cannot be taken.
+- `imagetools:prune` reads only the default manifest. It refuses an empty manifest (always), a
+  manifest under `bootstrap/cache` and more than half of the files as orphans (both lifted by
+  `--force`; a dry run only warns on the second).
+- `Manifest::whileLocked()` is the one lock user without the no-lock fallback: it throws instead,
+  because it guards a delete. Code inside it (and inside `putIfAbsent()`'s condition) never writes
+  the manifest: a second `flock` in the same process waits for ever. `imagetools:prune` deletes a
+  file only inside `whileLocked()`, after it reads the manifest again, and keeps files modified in
+  the last hour (an upload comes before its entry write).
 
 ## Where to read more
 

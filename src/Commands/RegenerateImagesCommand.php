@@ -134,7 +134,7 @@ class RegenerateImagesCommand extends Command
      * An entry with a null path is a request larger than the source: it has no
      * file by design, so it is not broken.
      *
-     * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}  $entry
+     * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}  $entry
      */
     protected function isBroken(array $entry): bool
     {
@@ -155,7 +155,7 @@ class RegenerateImagesCommand extends Command
      * Rebuild one entry from its recorded source. The source disk is carried
      * along so the derivative lands on the key the manifest already records.
      *
-     * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}  $entry
+     * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}  $entry
      * @return array{path: string|null, disk: string|null}|null
      */
     protected function regenerate(array $entry): ?array
@@ -170,6 +170,7 @@ class RegenerateImagesCommand extends Command
             $tool = $tool->disk($entry['source_disk']);
         }
 
-        return $tool->generate($entry['source']);
+        // The rebuilt entry replaces the old one, so a recorded Media key is carried along.
+        return $tool->withMediaId($entry['media_id'] ?? null)->generate($entry['source']);
     }
 }

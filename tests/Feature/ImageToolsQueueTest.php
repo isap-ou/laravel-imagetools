@@ -358,6 +358,14 @@ class ImageToolsQueueTest extends TestCase
         Storage::disk('public')->assertExists($manifest['public/images/queue.png?w=16']['path']);
     }
 
+    public function test_a_job_whose_query_fails_validation_still_throws(): void
+    {
+        // asset() reports and swallows this; a job must still fail, so the queue retries and records it.
+        $this->expectException(\Illuminate\Validation\ValidationException::class);
+
+        (new GenerateImageJob('public/images/queue.png?fit=crop&w=16'))->handle();
+    }
+
     public function test_job_for_a_width_above_the_source_stores_no_file(): void
     {
         File::put(base_path('public/images/queue-small.png'), $this->pngBytes(40, 20));

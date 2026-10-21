@@ -26,6 +26,52 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Upload Options
+    |--------------------------------------------------------------------------
+    |
+    | Options that every upload of a generated file passes to the disk, as the
+    | options argument of putFileAs(). For example, on an S3 disk:
+    |   ['CacheControl' => 'public, max-age=31536000, immutable']
+    | The keys depend on the disk driver. Default: [] (no options).
+    */
+    'put_options' => [],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Image Driver
+    |--------------------------------------------------------------------------
+    |
+    | The spatie/image driver that loads and encodes the source: 'gd',
+    | 'imagick', 'vips', or the class name of a spatie/image ImageDriver.
+    | When null (the default), spatie/image picks it:
+    | Imagick when the extension is loaded, else GD. Set it when the quality
+    | settings of your queries are tuned for one driver. The value is not part
+    | of the file name: after a change, run "imagetools:regenerate --all".
+    */
+    'driver' => env('IMAGE_TOOLS_DRIVER'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Optimizers
+    |--------------------------------------------------------------------------
+    |
+    | The optimizer chain that runs after each encode, in the format of the
+    | spatie/laravel-medialibrary "image_optimizers" config: an optimizer class
+    | => its command-line arguments. The optimizers run in the given order;
+    | [] runs none. When null (the default), the spatie/image-optimizer default
+    | chain runs. That chain encodes a WebP again with "cwebp -q 90" and an
+    | AVIF with "cq-level=23", whatever "q" the query asks for. A query can skip
+    | the chain with "optimize=0". A lossless WebP always uses its own lossless
+    | cwebp chain. The value is not part of the file name: after a change, run
+    | "imagetools:regenerate --all".
+    |
+    | Example:
+    |   Spatie\ImageOptimizer\Optimizers\Jpegoptim::class => ['-m85', '--strip-all', '--all-progressive'],
+    */
+    'optimizers' => null,
+
+    /*
+    |--------------------------------------------------------------------------
     | Allow Upscale
     |--------------------------------------------------------------------------
     |

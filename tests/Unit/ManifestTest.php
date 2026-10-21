@@ -8,7 +8,9 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Isapp\ImageTools\Support\Manifest;
 use Isapp\ImageTools\Tests\TestCase;
+use RuntimeException;
 
+use function array_keys;
 use function base_path;
 use function chmod;
 use function fclose;
@@ -120,6 +122,85 @@ class ManifestTest extends TestCase
         $this->assertTrue(self::lockIsFree($this->path), 'clear() did not release the lock.');
 
         $this->assertSame([true, true], $manifest->lockHeldAtRead);
+    }
+
+    public function test_put_if_absent_writes_a_missing_key_under_the_lock(): void
+    {
+        $manifest = new Manifest($this->path);
+        $lockHeld = null;
+
+        $written = $manifest->putIfAbsent('default', 'a.png?w=8', $this->entry('a.png?w=8', 'image-tools/a.png'), function () use (&$lockHeld) {
+            $lockHeld = ! self::lockIsFree($this->path);
+
+            return true;
+        });
+
+        $this->assertTrue($written);
+        $this->assertTrue($lockHeld);
+        $this->assertTrue(self::lockIsFree($this->path), 'putIfAbsent() did not release the lock.');
+        $this->assertArrayHasKey('a.png?w=8', require $this->path);
+    }
+
+    public function test_put_if_absent_keeps_an_entry_that_another_process_wrote(): void
+    {
+        // This process read the manifest before another process wrote the key.
+        $manifest = new Manifest($this->path);
+        $other = $this->entry('a.png?w=8', 'image-tools/other.png');
+        (new Manifest($this->path))->put('default', 'a.png?w=8', $other);
+
+        $asked = false;
+        $written = $manifest->putIfAbsent('default', 'a.png?w=8', $this->entry('a.png?w=8', 'image-tools/a.png'), function () use (&$asked) {
+            $asked = true;
+
+            return true;
+        });
+
+        $this->assertFalse($written);
+        $this->assertFalse($asked, 'The condition runs only for a missing key.');
+        $this->assertSame($other, (require $this->path)['a.png?w=8']);
+    }
+
+    public function test_put_if_absent_writes_nothing_when_the_condition_fails(): void
+    {
+        $manifest = new Manifest($this->path);
+
+        $this->assertFalse($manifest->putIfAbsent('default', 'a.png?w=8', $this->entry('a.png?w=8', 'image-tools/a.png'), fn () => false));
+        $this->assertFileDoesNotExist($this->path);
+    }
+
+    public function test_while_locked_runs_the_callback_with_the_entries_from_the_file_under_the_lock(): void
+    {
+        // This process read the manifest before another process wrote an entry.
+        $manifest = new Manifest($this->path);
+        (new Manifest($this->path))->put('default', 'a.png?w=8', $this->entry('a.png?w=8', 'image-tools/a.png'));
+
+        $result = $manifest->whileLocked(fn (array $entries) => [array_keys($entries), ! self::lockIsFree($this->path)]);
+
+        $this->assertSame([['a.png?w=8'], true], $result);
+        $this->assertTrue(self::lockIsFree($this->path), 'whileLocked() did not release the lock.');
+    }
+
+    public function test_while_locked_refuses_to_run_without_the_lock(): void
+    {
+        $manifest = new class($this->path) extends Manifest
+        {
+            protected function acquire(string $path)
+            {
+                return null;
+            }
+        };
+
+        $ran = false;
+
+        try {
+            $manifest->whileLocked(function () use (&$ran) {
+                $ran = true;
+            });
+            $this->fail('whileLocked() ran without the lock.');
+        } catch (RuntimeException) {
+        }
+
+        $this->assertFalse($ran);
     }
 
     /**

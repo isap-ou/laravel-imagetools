@@ -28,6 +28,9 @@
     "spatie/image-optimizer": "^1.10",
     "symfony/finder": "^6.4|^7.0|^8.0"
   },
+  "suggest": {
+    "spatie/laravel-medialibrary": "Use ImageTools::media($media, '...') to make derivatives of a Media original (^11)."
+  },
   "autoload": {
     "psr-4": {
       "Isapp\\ImageTools\\": "src/"

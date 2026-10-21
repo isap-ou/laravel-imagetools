@@ -6,13 +6,16 @@
 > derivative written to a configured filesystem disk, recording the `path?query → file`
 > mapping in a PHP manifest so later calls are cheap.
 
-Key ideas: the query string (`w`, `h`, `fit`, `q`, `format`) is canonicalized — reduced to
+Key ideas: the query string (`w`, `h`, `fit`, `q`, `format`, `lossless`, `optimize`) is canonicalized — reduced to
 those keys and sorted — into a "seed" that yields deterministic filenames and manifest keys.
 Generation runs on demand, ahead of time via a scanner command, or deferred to the queue
 with a `queue` flag or the `queue` config; a queued miss returns the original's URL until a
 worker has made the derivative (`queue_fallback`). Works with any Laravel disk (public, S3/R2). By default a resize by
 `w` or `h` without `fit` never enlarges a smaller source: that request stores no file, and
-`asset()` returns `null`.
+`asset()` returns `null`. A failed in-request generation is reported and `asset()` returns `''`.
+`ImageTools::media($media, 'w=800')` makes a derivative of the original of a spatie/laravel-medialibrary `Media` and
+records its key as `media_id`. `driver`, `optimizers` and `put_options` control the encode and the upload;
+`optimize=0` skips the optimizer chain per query.
 
 ## Documentation
 
@@ -27,4 +30,5 @@ worker has made the derivative (`queue_fallback`). Works with any Laravel disk (
 - [GenerateImagesCommand](src/Commands/GenerateImagesCommand.php): scan Blade/PHP and pre‑generate
 - [ClearGeneratedImagesCommand](src/Commands/ClearGeneratedImagesCommand.php): remove generated files and the manifest
 - [RegenerateImagesCommand](src/Commands/RegenerateImagesCommand.php): rebuild manifest entries whose stored file is missing or empty
-- [config](config/image-tools.php): disk, upscale policy, manifest path, scan paths, queue settings
+- [PruneImagesCommand](src/Commands/PruneImagesCommand.php): delete generated files that no manifest entry references
+- [config](config/image-tools.php): disk, upload options, image driver, optimizers, upscale policy, manifest path, scan paths, queue settings

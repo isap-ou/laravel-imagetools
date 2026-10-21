@@ -13,14 +13,20 @@ use Isapp\ImageTools\Support\Manifest;
 use Isapp\ImageTools\Support\PathResolver;
 use Isapp\ImageTools\Support\SourceReader;
 use Isapp\ImageTools\Tests\TestCase;
+use League\Flysystem\UnableToCheckFileExistence;
 use League\Flysystem\UnableToDeleteFile;
 use Mockery;
+use Spatie\Image\Exceptions\InvalidImageDriver;
 use Spatie\Image\Image;
 use Spatie\ImageOptimizer\OptimizerChain;
+use Spatie\ImageOptimizer\OptimizerChainFactory;
 use Spatie\ImageOptimizer\Optimizers\Cwebp;
+use Spatie\ImageOptimizer\Optimizers\Jpegoptim;
 
 use function app;
+use function array_map;
 use function base_path;
+use function get_class;
 use function getimagesizefromstring;
 use function sha1;
 use function storage_path;
@@ -428,6 +434,295 @@ class ImageToolsGenerateTest extends TestCase
         $res = $it->generate('public/images/missing.png?w=10');
         $this->assertNull($res);
         $this->assertFileDoesNotExist($manifestFile);
+    }
+
+    public function test_the_driver_config_picks_the_image_driver(): void
+    {
+        config()->set('image-tools.driver', 'gd');
+
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertSame(['gd'], $it->drivers);
+    }
+
+    public function test_no_driver_config_keeps_the_choice_of_spatie_image(): void
+    {
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertSame([\extension_loaded('imagick') ? 'imagick' : 'gd'], $it->drivers);
+    }
+
+    public function test_an_unknown_driver_throws(): void
+    {
+        config()->set('image-tools.driver', 'paint');
+
+        $this->expectException(InvalidImageDriver::class);
+
+        app(ImageTools::class)->generate('public/images/fixture.png?w=8');
+    }
+
+    public function test_the_default_chain_is_the_spatie_default_chain(): void
+    {
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertCount(1, $it->chains);
+        $this->assertNotNull($it->chains[0]);
+        $this->assertSame(
+            array_map(get_class(...), OptimizerChainFactory::create()->getOptimizers()),
+            array_map(get_class(...), $it->chains[0]->getOptimizers())
+        );
+    }
+
+    public function test_optimize_off_runs_no_optimizer_and_gets_its_own_file(): void
+    {
+        $it = $this->recordingTools();
+
+        $plain = $it->generate('public/images/fixture.png?format=webp&q=80');
+        $off = $it->generate('public/images/fixture.png?format=webp&q=80&optimize=0');
+
+        $this->assertNotNull($it->chains[0]);
+        $this->assertNull($it->chains[1]);
+        $this->assertNotSame($plain['path'], $off['path']);
+        Storage::disk('public')->assertExists($off['path']);
+    }
+
+    public function test_optimize_on_resolves_to_the_plain_file(): void
+    {
+        $it = app(ImageTools::class);
+
+        $plain = $it->generate('public/images/fixture.png?format=webp');
+
+        $this->assertSame($plain['path'], $it->generate('public/images/fixture.png?format=webp&optimize=1')['path']);
+        $this->assertSame($plain['path'], $it->generate('public/images/fixture.png?format=webp&optimize=true')['path']);
+    }
+
+    public function test_an_unreadable_optimize_value_is_rejected(): void
+    {
+        $this->expectException(\Illuminate\Validation\ValidationException::class);
+
+        app(ImageTools::class)->generate('public/images/fixture.png?optimize=maybe');
+    }
+
+    public function test_the_optimizers_config_builds_exactly_that_chain(): void
+    {
+        config()->set('image-tools.optimizers', [
+            Jpegoptim::class => ['-m80', '--strip-all'],
+            Cwebp::class => ['-q 80'],
+        ]);
+
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?w=8');
+
+        $optimizers = $it->chains[0]->getOptimizers();
+
+        $this->assertCount(2, $optimizers);
+        $this->assertInstanceOf(Jpegoptim::class, $optimizers[0]);
+        $this->assertSame(['-m80', '--strip-all'], $optimizers[0]->options);
+        $this->assertInstanceOf(Cwebp::class, $optimizers[1]);
+        $this->assertSame(['-q 80'], $optimizers[1]->options);
+    }
+
+    public function test_an_empty_optimizers_config_builds_an_empty_chain(): void
+    {
+        config()->set('image-tools.optimizers', []);
+
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertNotNull($it->chains[0]);
+        $this->assertSame([], $it->chains[0]->getOptimizers());
+    }
+
+    public function test_lossless_keeps_its_own_chain_when_optimizers_are_set(): void
+    {
+        if (! \extension_loaded('imagick')) {
+            $this->markTestSkipped('The lossless switch is an Imagick option; GD has none.');
+        }
+
+        config()->set('image-tools.optimizers', [Jpegoptim::class => ['-m80']]);
+
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?format=webp&lossless=1');
+
+        $optimizers = $it->chains[0]->getOptimizers();
+
+        $this->assertCount(1, $optimizers);
+        $this->assertInstanceOf(Cwebp::class, $optimizers[0]);
+        $this->assertContains('-lossless', $optimizers[0]->options);
+    }
+
+    public function test_optimize_off_still_writes_a_lossless_webp_under_imagick(): void
+    {
+        if (! \extension_loaded('imagick')) {
+            $this->markTestSkipped('The lossless switch is an Imagick option; GD has none.');
+        }
+
+        $it = $this->recordingTools();
+        $res = $it->generate('public/images/fixture.png?format=webp&lossless=1&optimize=0');
+
+        $this->assertNull($it->chains[0]);
+        $this->assertStringContainsString('VP8L', substr(Storage::disk('public')->get($res['path']), 0, 64));
+    }
+
+    public function test_a_file_at_the_stored_name_without_an_entry_is_adopted_without_an_encode(): void
+    {
+        // A lost manifest: the file of an earlier encode is still on the disk.
+        File::delete(base_path('bootstrap/cache/image-tools.php'));
+        $stored = app(PathResolver::class)->storedFile('public/images/fixture.png?w=8');
+        Storage::disk('public')->put($stored['path'], 'bytes of an earlier encode');
+
+        $it = $this->recordingTools();
+        $res = $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertSame(['path' => $stored['path'], 'disk' => 'public'], $res);
+        $this->assertSame([], $it->drivers, 'The adopted file must not be encoded again.');
+        $this->assertSame('bytes of an earlier encode', Storage::disk('public')->get($stored['path']));
+
+        $entries = require base_path('bootstrap/cache/image-tools.php');
+        $this->assertSame([
+            'path' => $stored['path'],
+            'disk' => 'public',
+            'source' => 'public/images/fixture.png?w=8',
+            'source_disk' => null,
+        ], $entries['public/images/fixture.png?w=8']);
+    }
+
+    public function test_an_empty_file_at_the_stored_name_is_encoded_again(): void
+    {
+        File::delete(base_path('bootstrap/cache/image-tools.php'));
+        $stored = app(PathResolver::class)->storedFile('public/images/fixture.png?w=8');
+        Storage::disk('public')->put($stored['path'], '');
+
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertCount(1, $it->drivers);
+        $this->assertSame([8, 8], $this->storedSize($stored['path']));
+    }
+
+    public function test_a_file_with_an_entry_is_encoded_again(): void
+    {
+        // regenerate rebuilds entries that exist; it must not adopt their old file.
+        $first = app(ImageTools::class)->generate('public/images/fixture.png?w=8');
+        Storage::disk('public')->put($first['path'], 'old bytes');
+
+        $it = $this->recordingTools();
+        $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertCount(1, $it->drivers);
+        $this->assertSame([8, 8], $this->storedSize($first['path']));
+    }
+
+    public function test_an_oversize_request_does_not_adopt_a_file_at_its_stored_name(): void
+    {
+        $stored = app(PathResolver::class)->storedFile('public/images/small.png?w=80');
+        Storage::disk('public')->put($stored['path'], 'an enlarged file');
+
+        $res = app(ImageTools::class)->generate('public/images/small.png?w=80');
+
+        $this->assertSame(['path' => null, 'disk' => null], $res);
+        Storage::disk('public')->assertMissing($stored['path']);
+    }
+
+    public function test_a_disk_that_cannot_check_the_stored_file_still_gets_the_encode(): void
+    {
+        File::delete(base_path('bootstrap/cache/image-tools.php'));
+
+        // S3 credentials without the right to list turn a missing key into a 403.
+        $disk = Mockery::mock(Storage::disk('public'));
+        $disk->shouldReceive('fileExists')->andThrow(UnableToCheckFileExistence::forLocation('image-tools/x', new \RuntimeException('403 Forbidden')));
+        Storage::set('public', $disk);
+
+        Log::spy();
+
+        $it = $this->recordingTools();
+        $res = $it->generate('public/images/fixture.png?w=8');
+
+        $this->assertCount(1, $it->drivers);
+        $this->assertSame([8, 8], $this->storedSize($res['path']));
+        Log::shouldHaveReceived('warning')
+            ->with('ImageTools: the stored file could not be checked; the image is encoded again.', Mockery::type('array'))
+            ->once();
+    }
+
+    public function test_an_upload_that_returns_false_is_logged(): void
+    {
+        $disk = Mockery::mock(Storage::disk('public'));
+        $disk->shouldReceive('putFileAs')->andReturn(false);
+        Storage::set('public', $disk);
+
+        Log::spy();
+
+        $this->assertNull(app(ImageTools::class)->generate('public/images/fixture.png?w=9'));
+
+        Log::shouldHaveReceived('warning')
+            ->with('ImageTools: the upload of the generated file failed; nothing was stored.', Mockery::type('array'))
+            ->once();
+    }
+
+    public function test_a_null_output_disk_uses_the_default_disk(): void
+    {
+        config()->set('image-tools.disk', null);
+        config()->set('filesystems.default', 'public');
+
+        $res = app(ImageTools::class)->generate('public/images/fixture.png?w=8');
+
+        $this->assertNull($res['disk']);
+        Storage::disk('public')->assertExists($res['path']);
+    }
+
+    public function test_an_empty_optimize_value_counts_as_off(): void
+    {
+        $it = $this->recordingTools();
+
+        $empty = $it->generate('public/images/fixture.png?format=webp&optimize=');
+        $off = app(PathResolver::class)->storedFile('public/images/fixture.png?format=webp&optimize=0');
+
+        $this->assertNull($it->chains[0]);
+        $this->assertSame($off['path'], $empty['path']);
+    }
+
+    public function test_put_options_reach_the_upload(): void
+    {
+        config()->set('image-tools.put_options', ['visibility' => 'private']);
+
+        $res = app(ImageTools::class)->generate('public/images/fixture.png?w=8');
+
+        $this->assertSame('private', Storage::disk('public')->getVisibility($res['path']));
+    }
+
+    public function test_no_put_options_keep_the_disk_default(): void
+    {
+        $res = app(ImageTools::class)->generate('public/images/fixture.png?w=8');
+
+        $this->assertSame('public', Storage::disk('public')->getVisibility($res['path']));
+    }
+
+    /**
+     * An ImageTools that records the driver and the chain of each encode
+     * before it writes the file.
+     */
+    private function recordingTools(): ImageTools
+    {
+        return new class(app(Manifest::class), app(PathResolver::class), app(SourceReader::class)) extends ImageTools
+        {
+            /** @var list<string> */
+            public array $drivers = [];
+
+            /** @var list<OptimizerChain|null> */
+            public array $chains = [];
+
+            protected function writeDerivative(Image $image, string $tmpPath, ?OptimizerChain $chain = null): void
+            {
+                $this->drivers[] = $image->driverName();
+                $this->chains[] = $chain;
+
+                parent::writeDerivative($image, $tmpPath, $chain);
+            }
+        };
     }
 
     /**

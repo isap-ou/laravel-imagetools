@@ -62,6 +62,23 @@ class PathResolverTest extends TestCase
         );
     }
 
+    public function test_optimize_off_is_part_of_the_identity_and_on_is_not(): void
+    {
+        $plain = $this->resolver->seed('public/images/a.png?format=webp');
+        $off = $this->resolver->seed('public/images/a.png?format=webp&optimize=0');
+
+        $this->assertNotSame($plain, $off);
+        $this->assertSame($off, $this->resolver->seed('public/images/a.png?optimize=false&format=webp'));
+        $this->assertNotSame(
+            $this->resolver->storedFile('public/images/a.png?format=webp')['path'],
+            $this->resolver->storedFile('public/images/a.png?format=webp&optimize=0')['path']
+        );
+
+        // On is the default, so it must not earn a file of its own.
+        $this->assertSame($plain, $this->resolver->seed('public/images/a.png?format=webp&optimize=1'));
+        $this->assertSame($plain, $this->resolver->seed('public/images/a.png?format=webp&optimize=true'));
+    }
+
     public function test_source_disk_is_folded_into_the_seed(): void
     {
         $local = $this->resolver->seed('a.jpg?w=200');
