@@ -27,7 +27,7 @@ class PathResolver
      * Query keys that define the derivative's identity. Anything outside this set
      * is ignored, so asset() (read) and generate() (write) always agree.
      */
-    public const OPTION_KEYS = ['w', 'h', 'q', 'fit', 'format', 'lossless'];
+    public const OPTION_KEYS = ['w', 'h', 'q', 'fit', 'format', 'lossless', 'optimize'];
 
     /**
      * Canonical "seed" for a path: the query reduced to OPTION_KEYS and sorted,
@@ -91,6 +91,10 @@ class PathResolver
      * that, `lossless=0` would earn a second filename holding the same bytes as
      * the plain one, and `lossless=true` a third.
      *
+     * 'optimize' is the same kind of switch, but it is on by default: every
+     * spelling of "off" collapses to 0, and every spelling of "on" drops out,
+     * so `optimize=1` keeps the file that the plain query already has.
+     *
      * @return array<string, mixed>
      */
     protected function options(string $params): array
@@ -104,6 +108,14 @@ class PathResolver
                 $options['lossless'] = '1';
             } else {
                 unset($options['lossless']);
+            }
+        }
+
+        if (\array_key_exists('optimize', $options)) {
+            if (filter_var($options['optimize'], FILTER_VALIDATE_BOOLEAN)) {
+                unset($options['optimize']);
+            } else {
+                $options['optimize'] = '0';
             }
         }
 

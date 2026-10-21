@@ -4,11 +4,23 @@ declare(strict_types=1);
 
 namespace Isapp\ImageTools\Tests\Feature;
 
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Isapp\ImageTools\Facades\ImageTools as ImageToolsFacade;
+use Isapp\ImageTools\ImageTools;
+use Isapp\ImageTools\Support\Manifest;
+use Isapp\ImageTools\Support\PathResolver;
+use Isapp\ImageTools\Support\SourceReader;
 use Isapp\ImageTools\Tests\TestCase;
+use Mockery;
+use RuntimeException;
+use Spatie\Image\Image;
+use Spatie\ImageOptimizer\OptimizerChain;
 
+use function app;
 use function base_path;
 
 class ImageToolsAssetTest extends TestCase
@@ -124,6 +136,64 @@ class ImageToolsAssetTest extends TestCase
     {
         // A failure stays distinct from a request larger than the source, which returns null.
         $this->assertSame('', ImageToolsFacade::asset('public/images/missing.png?w=10'));
+    }
+
+    public function test_asset_logs_a_query_that_fails_validation_and_returns_an_empty_string(): void
+    {
+        Log::spy();
+
+        File::ensureDirectoryExists(base_path('public/images'));
+        File::put(base_path('public/images/test.png'), $this->pngBytes());
+
+        $this->assertSame('', ImageToolsFacade::asset('public/images/test.png?fit=crop&w=10'));
+
+        // Laravel never reports a ValidationException, so the package logs it itself.
+        Log::shouldHaveReceived('warning')
+            ->with('ImageTools: the image could not be generated; asset() returns an empty string.', Mockery::on(
+                fn (array $context) => $context['path'] === 'public/images/test.png?fit=crop&w=10'
+                    && $context['disk'] === null
+                    && $context['exception'] === ValidationException::class
+                    && isset($context['errors']['h'])
+            ))
+            ->once();
+    }
+
+    public function test_asset_reports_an_encode_that_throws_and_returns_an_empty_string(): void
+    {
+        Exceptions::fake();
+
+        File::ensureDirectoryExists(base_path('public/images'));
+        File::put(base_path('public/images/test.png'), $this->pngBytes());
+
+        $it = new class(app(Manifest::class), app(PathResolver::class), app(SourceReader::class)) extends ImageTools
+        {
+            protected function writeDerivative(Image $image, string $tmpPath, ?OptimizerChain $chain = null): void
+            {
+                throw new RuntimeException('The encoder failed.');
+            }
+        };
+
+        Log::spy();
+
+        $this->assertSame('', $it->asset('public/images/test.png?w=10'));
+
+        Exceptions::assertReported(fn (RuntimeException $e) => $e->getMessage() === 'The encoder failed.');
+
+        // The report names no image; the warning does.
+        Log::shouldHaveReceived('warning')
+            ->with('ImageTools: the image could not be generated; asset() returns an empty string.', Mockery::on(
+                fn (array $context) => $context['path'] === 'public/images/test.png?w=10'
+                    && $context['exception'] === RuntimeException::class
+                    && ! isset($context['errors'])
+            ))
+            ->once();
+    }
+
+    public function test_generate_still_throws_for_a_query_that_fails_validation(): void
+    {
+        $this->expectException(ValidationException::class);
+
+        ImageToolsFacade::generate('public/images/test.png?fit=crop&w=10');
     }
 
     public function test_asset_returns_empty_string_for_unknown_manifest_namespace(): void

@@ -11,10 +11,12 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Isapp\ImageTools\Jobs\GenerateImageJob;
 use Isapp\ImageTools\Support\Manifest;
 use Isapp\ImageTools\Support\PathResolver;
 use Isapp\ImageTools\Support\SourceReader;
+use League\Flysystem\FilesystemException;
 use Spatie\Image\Enums\Fit;
 use Spatie\Image\Image;
 use Spatie\ImageOptimizer\OptimizerChain;
@@ -22,13 +24,18 @@ use Spatie\ImageOptimizer\OptimizerChainFactory;
 use Spatie\ImageOptimizer\Optimizers\Cwebp;
 
 use function app;
+use function array_keys;
 use function array_pad;
 use function basename;
 use function config;
 use function explode;
 use function filter_var;
+use function ltrim;
+use function method_exists;
 use function parse_str;
+use function report;
 use function storage_path;
+use function str_contains;
 use function str_ends_with;
 use function var_export;
 
@@ -53,6 +60,13 @@ class ImageTools
      */
     protected ?string $sourceDisk = null;
 
+    /**
+     * Key of the medialibrary Media the source belongs to, recorded in the
+     * manifest entry as 'media_id'. Set via media() or withMediaId(); never
+     * part of the seed.
+     */
+    protected int|string|null $mediaId = null;
+
     public function __construct(
         protected Manifest $manifest,
         protected PathResolver $paths,
@@ -69,6 +83,63 @@ class ImageTools
         $clone->sourceDisk = $disk;
 
         return $clone;
+    }
+
+    /**
+     * Return a copy that records the given medialibrary Media key in the entries
+     * it writes. media() sets it; the queued job and imagetools:regenerate use it
+     * to carry a recorded key along, because they have only the key, not the
+     * Media. The key does not change the seed. Apps call media() instead.
+     *
+     * @internal
+     */
+    public function withMediaId(int|string|null $id): static
+    {
+        $clone = clone $this;
+        $clone->mediaId = $id;
+
+        return $clone;
+    }
+
+    /**
+     * Return a URL for the original of a spatie/laravel-medialibrary Media:
+     * ImageTools::media($media, 'fit=crop&w=1400&h=600&format=avif&q=75').
+     * The call is the same as disk($media->disk)->asset($media->getPathRelativeToRoot() . '?' . $query)
+     * and returns what asset() returns; the entry it writes also records the
+     * Media key as 'media_id'. Any object with a 'disk' attribute and the methods
+     * getPathRelativeToRoot() and getKey() works; medialibrary is not required.
+     *
+     * @param  \Spatie\MediaLibrary\MediaCollections\Models\Media|object  $media
+     *
+     * @throws \InvalidArgumentException when the object is not such a Media
+     */
+    public function media(object $media, string $query = '', string $manifest = 'default'): ?string
+    {
+        if (! method_exists($media, 'getPathRelativeToRoot') || ! method_exists($media, 'getKey')
+            || ! \is_string($media->disk ?? null) || $media->disk === '') {
+            throw new \InvalidArgumentException(
+                'ImageTools::media() takes a medialibrary Media: an object with a "disk" attribute and the methods getPathRelativeToRoot() and getKey().'
+            );
+        }
+
+        $file = $media->getPathRelativeToRoot();
+
+        // The first '?' starts the query, so a '?' in an uploaded file name would
+        // cut the path. The page gets '' as for any image that cannot be made.
+        if (str_contains($file, '?')) {
+            Log::warning('ImageTools: the Media file name contains a "?"; media() returns an empty string.', [
+                'path' => $file,
+                'disk' => $media->disk,
+                'media_id' => $media->getKey(),
+            ]);
+
+            return '';
+        }
+
+        $query = ltrim($query, '?');
+        $path = $file . ($query === '' ? '' : '?' . $query);
+
+        return $this->disk($media->disk)->withMediaId($media->getKey())->asset($path, $manifest);
     }
 
     /**
@@ -99,8 +170,9 @@ class ImageTools
      * @param  string  $manifest  Manifest namespace ('default' by default)
      * @return string|null null when the manifest entry has no file: the request is
      *                     larger than the source and upscaling is off; '' when the
-     *                     namespace is unknown, generate() returns null, or a queued
-     *                     miss has no fallback URL
+     *                     namespace is unknown, generate() returns null or throws
+     *                     (the exception is reported), or a queued miss has no
+     *                     fallback URL
      *
      * @throws \InvalidArgumentException for a queued miss with an unknown 'queue_fallback'
      */
@@ -130,7 +202,28 @@ class ImageTools
                 }
             }
 
-            if ($this->generate($path, $manifest) === null) {
+            // A page must not fail because one image cannot be made: a query that
+            // fails validation or a driver or encoder error is reported, and the
+            // render gets ''. A queued job calls generate() directly and still fails.
+            try {
+                $generated = $this->generate($path, $manifest);
+            } catch (\Throwable $e) {
+                report($e);
+
+                // The report names no image, and Laravel's handler never reports a
+                // ValidationException at all; the warning says which image failed.
+                Log::warning('ImageTools: the image could not be generated; asset() returns an empty string.', [
+                    'path' => $path,
+                    'disk' => $this->sourceDisk,
+                    'exception' => $e::class,
+                    'error' => $e->getMessage(),
+                    ...($e instanceof ValidationException ? ['errors' => $e->errors()] : []),
+                ]);
+
+                return '';
+            }
+
+            if ($generated === null) {
                 return '';
             }
         }
@@ -153,6 +246,7 @@ class ImageTools
      *  - q (1..100): quality
      *  - format: one of jpeg, png, gif, webp, avif
      *  - lossless (bool): lossless WebP; see applyLossless() for its two conditions
+     *  - optimize (bool, default on): off skips the optimizer chain; see optimizerChain()
      *
      * A resize by w or h larger than the source stores no file unless the
      * 'allow_upscale' config allows it; see recordOversize().
@@ -179,6 +273,7 @@ class ImageTools
             // 'queue' flag already does. Laravel's 'boolean' rule takes only
             // 1/0, so 'lossless=true' in a template would raise instead.
             'lossless' => ['nullable', Rule::in(['0', '1', 'true', 'false', 'on', 'off', 'yes', 'no'])],
+            'optimize' => ['nullable', Rule::in(['0', '1', 'true', 'false', 'on', 'off', 'yes', 'no'])],
         ]);
 
         // Resolve the source to a local path (a disk source is streamed to a temp file).
@@ -189,10 +284,33 @@ class ImageTools
         }
 
         try {
-            $image = new Image($source['path']);
+            $image = $this->loadImage($source['path']);
 
             if (! config('image-tools.allow_upscale') && $this->exceedsSource($image, $validated)) {
                 return $this->recordOversize($path, $manifest);
+            }
+
+            // The same destination backs asset()'s pre-computed URL, so the file
+            // written here is exactly the one asset() points to.
+            $savePath = $this->paths->storedFile($path, $this->sourceDisk)['path'];
+
+            // A manifest can lose an entry while its file stays on the disk (a
+            // manifest that was deleted or rebuilt). A file at the deterministic
+            // name is then adopted instead of encoded again. The check and the
+            // write share the manifest lock, so prune cannot delete the file in
+            // between. An entry that exists (regenerate) is always encoded again.
+            // The first check runs without the lock: on a real miss there is no
+            // file, and the disk calls must not hold up every other writer.
+            if ($this->isStored($disk, $savePath) && $this->manifest->putIfAbsent(
+                $manifest,
+                $this->paths->seed($path, $this->sourceDisk),
+                $this->entry($savePath, $disk, $path),
+                fn (): bool => $this->isStored($disk, $savePath)
+            )) {
+                return [
+                    'path' => $savePath,
+                    'disk' => $disk,
+                ];
             }
 
             // Apply geometry: 'fit' resizes to exactly w x h; otherwise resize by
@@ -208,15 +326,17 @@ class ImageTools
                 $image->quality((int) $validated['q']);
             }
 
-            // The same destination backs asset()'s pre-computed URL, so the file
-            // written here is exactly the one asset() points to.
-            $savePath = $this->paths->storedFile($path, $this->sourceDisk)['path'];
             $fileName = basename($savePath);
             $tmpPath = storage_path($savePath);
 
             File::ensureDirectoryExists(\dirname($tmpPath));
 
-            $chain = $this->applyLossless($image, $savePath, $validated['lossless'] ?? false);
+            // The lossless switch is set on the image even when the chain is skipped.
+            $losslessChain = $this->applyLossless($image, $savePath, $validated['lossless'] ?? false);
+
+            $chain = filter_var($validated['optimize'] ?? true, FILTER_VALIDATE_BOOLEAN)
+                ? ($losslessChain ?? $this->optimizerChain())
+                : null;
 
             $this->writeDerivative($image, $tmpPath, $chain);
 
@@ -235,22 +355,31 @@ class ImageTools
                 return null;
             }
 
-            $stored = Storage::disk($disk)->putFileAs('image-tools', new \Illuminate\Http\File($tmpPath), $fileName);
+            $stored = Storage::disk($disk)->putFileAs(
+                'image-tools',
+                new \Illuminate\Http\File($tmpPath),
+                $fileName,
+                (array) config('image-tools.put_options', [])
+            );
             File::delete($tmpPath);
 
+            // A disk with its 'throw' option off (the Laravel default) returns
+            // false instead of throwing, and reports nothing unless 'report' is on.
             if (! $stored) {
+                Log::warning('ImageTools: the upload of the generated file failed; nothing was stored.', [
+                    'path' => $path,
+                    'disk' => $disk,
+                    'stored_as' => $savePath,
+                    'put_options' => array_keys((array) config('image-tools.put_options', [])),
+                ]);
+
                 return null;
             }
 
             // The source is recorded next to the output so a later pass — see the
             // imagetools:regenerate command — can rebuild this exact derivative
             // without re-deriving anything from the key.
-            $this->manifest->put($manifest, $this->paths->seed($path, $this->sourceDisk), [
-                'path' => $savePath,
-                'disk' => $disk,
-                'source' => $path,
-                'source_disk' => $this->sourceDisk,
-            ]);
+            $this->manifest->put($manifest, $this->paths->seed($path, $this->sourceDisk), $this->entry($savePath, $disk, $path));
 
             return [
                 'path' => $savePath,
@@ -262,6 +391,23 @@ class ImageTools
                 File::delete($source['path']);
             }
         }
+    }
+
+    /**
+     * Load the local source with the configured image driver. With no 'driver'
+     * config, spatie/image picks it: Imagick when the extension is loaded, else GD.
+     * A value names a driver ('gd', 'imagick', 'vips') or an ImageDriver class;
+     * spatie/image throws for any other value.
+     */
+    protected function loadImage(string $path): Image
+    {
+        $driver = config('image-tools.driver');
+
+        if ($driver === null || $driver === '') {
+            return new Image($path);
+        }
+
+        return Image::useImageDriver($driver)->loadFile($path);
     }
 
     /**
@@ -312,12 +458,7 @@ class ImageTools
 
         // The entry comes first. If a delete then fails, the worst case is a file
         // that nothing points to, never an entry that points to a deleted file.
-        $this->manifest->put($manifest, $seed, [
-            'path' => null,
-            'disk' => null,
-            'source' => $path,
-            'source_disk' => $this->sourceDisk,
-        ]);
+        $this->manifest->put($manifest, $seed, $this->entry(null, null, $path));
 
         $this->deleteQuietly($stored['disk'], $stored['path']);
 
@@ -329,6 +470,52 @@ class ImageTools
             'path' => null,
             'disk' => null,
         ];
+    }
+
+    /**
+     * The manifest entry for a stored file, or for no file (a null path and disk).
+     * A Media key is added only when there is one (see media()).
+     *
+     * @return array{path: string|null, disk: string|null, source: string, source_disk: string|null, media_id?: int|string}
+     */
+    protected function entry(?string $path, ?string $disk, string $source): array
+    {
+        $entry = [
+            'path' => $path,
+            'disk' => $disk,
+            'source' => $source,
+            'source_disk' => $this->sourceDisk,
+        ];
+
+        if ($this->mediaId !== null) {
+            $entry['media_id'] = $this->mediaId;
+        }
+
+        return $entry;
+    }
+
+    /**
+     * Whether a file is on the disk with at least one byte in it. An empty file
+     * is what an optimizer killed mid-write leaves behind; it is not a derivative.
+     */
+    protected function isStored(?string $disk, string $path): bool
+    {
+        $storage = Storage::disk($disk);
+
+        // A disk that cannot answer (for example S3 credentials without the right
+        // to list, which turn a missing key into a 403) must not stop generation:
+        // the file is then encoded as when nothing is stored.
+        try {
+            return $storage->fileExists($path) && $storage->size($path) > 0;
+        } catch (FilesystemException $e) {
+            Log::warning('ImageTools: the stored file could not be checked; the image is encoded again.', [
+                'disk' => $disk,
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**
@@ -395,13 +582,41 @@ class ImageTools
     }
 
     /**
-     * Encode the prepared image to a local temporary path. optimize() is a no-op
-     * when no optimizer binaries are installed; a chain is passed only when the
-     * request needs options the default chain does not carry.
+     * The chain that runs after an ordinary encode: the 'optimizers' config, or
+     * the spatie/image-optimizer default chain when it is null. The chain is
+     * built here rather than with OptimizerChainFactory::create($config),
+     * because the factory ignores a config that has none of its own seven
+     * optimizer classes and returns the default chain instead.
+     */
+    protected function optimizerChain(): OptimizerChain
+    {
+        $optimizers = config('image-tools.optimizers');
+
+        if ($optimizers === null) {
+            return OptimizerChainFactory::create();
+        }
+
+        $chain = new OptimizerChain;
+
+        foreach ($optimizers as $optimizer => $options) {
+            $chain->addOptimizer(new $optimizer($options));
+        }
+
+        return $chain;
+    }
+
+    /**
+     * Encode the prepared image to a local temporary path, then run the chain
+     * on it. A null chain runs no optimizer (the query has 'optimize=0').
+     * optimize() is a no-op when no optimizer binaries are installed.
      */
     protected function writeDerivative(Image $image, string $tmpPath, ?OptimizerChain $chain = null): void
     {
-        $image->optimize($chain)->save($tmpPath);
+        if ($chain !== null) {
+            $image->optimize($chain);
+        }
+
+        $image->save($tmpPath);
     }
 
     /**
@@ -480,12 +695,12 @@ class ImageTools
         try {
             // The PendingDispatch takes the unique lock and pushes the job when it is
             // destroyed, at the end of this statement. Bus::dispatch() skips the lock.
-            GenerateImageJob::dispatch($path, $manifest, $this->sourceDisk);
+            GenerateImageJob::dispatch($path, $manifest, $this->sourceDisk, $this->mediaId);
         } catch (\Throwable $e) {
             // Laravel keeps the unique lock when the push throws, which would block
             // this seed for unique_for. A duplicate job is harmless: it checks has().
             try {
-                (new UniqueLock(app(Cache::class)))->release(new GenerateImageJob($path, $manifest, $this->sourceDisk));
+                (new UniqueLock(app(Cache::class)))->release(new GenerateImageJob($path, $manifest, $this->sourceDisk, $this->mediaId));
             } catch (\Throwable) {
             }
 

@@ -28,12 +28,16 @@ Deterministic, query‑driven image generation for Laravel — inspired by **vit
 - 🧹 **Clear command** to remove generated files & the manifest
 - ⏳ **Deferred generation** via a `queue` flag or config — the page responds at once and shows the original (when it has a public URL) until a worker has made the derivative
 - 🚫 **No upscaling** by default — a `w`/`h` request without `fit` larger than the source returns `null` instead of an enlarged file
+- 🎛️ **Encode control** — pick the image driver, set the optimizer chain, or skip it per query with `optimize=0`
+- 🖼️ **spatie/laravel-medialibrary** — `ImageTools::media($media, 'w=800')` makes a derivative of a Media original
+- 🗑️ **Prune command** to delete generated files that the manifest no longer references
 
 ## Requirements
 
 - PHP **8.2+**
 - Laravel **10+** (works with 10/11/12)
-- Image driver: **Imagick** (recommended) or **GD** for [`spatie/image`](https://github.com/spatie/image)
+- Image driver: **Imagick** (recommended) or **GD** for [`spatie/image`](https://github.com/spatie/image).
+  When both are installed, spatie/image uses Imagick; set [`driver`](#configuration) to choose.
 
 ## Installation
 
@@ -96,6 +100,7 @@ All options live in `config/image-tools.php` (with inline comments). You can als
 
 ```dotenv
 IMAGE_TOOLS_DISK=public
+IMAGE_TOOLS_DRIVER=gd                # gd | imagick | vips; defaults to the spatie/image choice
 IMAGE_TOOLS_ALLOW_UPSCALE=false
 IMAGE_TOOLS_MANIFEST_PATH=bootstrap/cache/image-tools.php
 IMAGE_TOOLS_BLADE_PATHS=resources/views,modules/*/resources/views
@@ -112,6 +117,9 @@ IMAGE_TOOLS_QUEUE_UNIQUE_FOR=3600
 Key options:
 
 - **`disk`** — Laravel filesystem disk where processed files are written and served from (`public`, `s3`, `r2`, …).
+- **`put_options`** — options that each upload passes to the disk (`putFileAs()`), default `[]`. For example, on an S3 or R2 disk: `['CacheControl' => 'public, max-age=31536000, immutable']`.
+- **`driver`** — the spatie/image driver: `gd`, `imagick`, `vips`, or the class name of a spatie/image `ImageDriver`. `null` (the default) lets spatie/image choose: Imagick when the extension is loaded, else GD. Set it when your `q` values are tuned for one driver.
+- **`optimizers`** — the optimizer chain that runs after each encode, in the format of the spatie/laravel-medialibrary `image_optimizers` config (optimizer class => arguments). `null` (the default) runs the spatie/image-optimizer default chain; `[]` runs none. See [Optimizers](#optimizers).
 - **`allow_upscale`** — `false` by default: a resize by `w` or `h` larger than the source stores no file, and `asset()` returns `null`. See [Larger than the source](#larger-than-the-source).
 - **`manifest_path`** — Path to the PHP manifest file that stores the mapping (relative paths resolve from the project base path).
 - **`blade_paths`** — Directories with Blade templates to scan for usages.
@@ -120,7 +128,7 @@ Key options:
 
 > The request is **canonicalized**: query keys are sorted before hashing, so `?h=630&w=1200` equals `?w=1200&h=630`.
 
-> **Zero‑downtime deploys (Forge, Envoyer, Deployer, Vapor):** the manifest is written at runtime when `asset()` generates an image on demand. `bootstrap/cache` is **per‑release**, so those entries are lost on the next deploy (the images are simply regenerated). If you rely on on‑demand generation, point the manifest at the **shared** `storage` directory, e.g. `IMAGE_TOOLS_MANIFEST_PATH=storage/app/image-tools.php`. If you only pre‑generate at build time with `imagetools:generate`, the default is fine.
+> **Zero‑downtime deploys (Forge, Envoyer, Deployer, Vapor):** the manifest is written at runtime when `asset()` generates an image on demand. `bootstrap/cache` is **per‑release**, so those entries are lost on the next deploy (the next miss adopts the file that is still on the disk, without an encode). If you rely on on‑demand generation, point the manifest at the **shared** `storage` directory, e.g. `IMAGE_TOOLS_MANIFEST_PATH=storage/app/image-tools.php`. If you only pre‑generate at build time with `imagetools:generate`, the default is fine.
 
 ### Query options
 
@@ -132,8 +140,33 @@ Key options:
 | `q`      | `int`      | Output quality (`1..100`).                                                                            |
 | `format` | `enum`     | Output format: `jpeg`, `png`, `gif`, `webp`, `avif`.                                                  |
 | `lossless` | `bool`   | Lossless WebP: `1`, `true`, `on` or `yes` switch it on. Takes effect when the output is a WebP **and** the driver is Imagick; otherwise the ordinary encode runs. A switch that is on is part of the canonical name, so the lossless variant is its own file; a switch that is off resolves to the same file as the plain call. |
+| `optimize` | `bool`   | On by default. `0`, `false`, `off` or `no` skip the optimizer chain, so the file is the encoder's output at `q`. A switch that is off is part of the canonical name (its own file); a switch that is on resolves to the same file as the plain call. |
 
 > `queue` is a **control flag**, not a transform — see below. It is excluded from the canonical name, so `?w=800` and `?w=800&queue=1` resolve to the **same** file.
+
+### Optimizers
+
+After each encode, an optimizer chain rewrites the file. By default it is the
+[spatie/image-optimizer](https://github.com/spatie/image-optimizer) chain. That chain
+encodes a WebP again with `cwebp -q 90` and an AVIF with `cq-level=23`, whatever `q`
+the query asks for. A lossy WebP or AVIF can then grow larger than the encoder's output.
+
+- Skip the chain for one request with `optimize=0`:
+  ```php
+  ImageTools::asset('public/images/hero.jpg?w=1400&format=avif&q=75&optimize=0');
+  ```
+- Or set your own chain for every request in `config/image-tools.php`. The optimizers
+  run in the given order; `[]` runs none:
+  ```php
+  'optimizers' => [
+      Spatie\ImageOptimizer\Optimizers\Jpegoptim::class => ['-m85', '--strip-all', '--all-progressive'],
+      Spatie\ImageOptimizer\Optimizers\Pngquant::class => ['--force'],
+  ],
+  ```
+
+A lossless WebP (`lossless=1`) always uses its own lossless cwebp chain. `driver` and
+`optimizers` are not part of the file name. After you change one of them, run
+`php artisan imagetools:regenerate --all` to encode the existing entries again.
 
 ### Larger than the source
 
@@ -331,6 +364,28 @@ ImageTools::disk('s3')->asset('assets/hero.jpg?w=1200&format=webp');
 > variable (`disk($name)`) or a path built at runtime. Those images are generated
 > on demand, or in the queue.
 
+## spatie/laravel-medialibrary
+
+`ImageTools::media()` makes a derivative of the original file of a
+[medialibrary](https://github.com/spatie/laravel-medialibrary) `Media`:
+
+```blade
+<img src="{{ ImageTools::media($media, 'fit=crop&w=1400&h=600&format=avif&q=75&optimize=0') }}">
+```
+
+- The call is the same as
+  `ImageTools::disk($media->disk)->asset($media->getPathRelativeToRoot() . '?' . $query)`:
+  the same query options, the same return values, the same file.
+- The manifest entry also records the Media key as `media_id`. The key is not part of
+  the canonical name, so `asset()` and `media()` for the same file share one entry. An
+  entry that `asset()` wrote first has no `media_id`.
+- A queued miss carries the key to the job, and `imagetools:regenerate` keeps it.
+- The package does not depend on medialibrary. Any object with a `disk` attribute and
+  the methods `getPathRelativeToRoot()` and `getKey()` works; another object throws
+  an `InvalidArgumentException`.
+- The scanner does not find `media()` calls: those images are generated on demand,
+  or in the queue.
+
 ## Commands
 
 ### Pre‑generate from code (CI‑friendly)
@@ -350,7 +405,9 @@ The scanner looks into `config('image-tools.blade_paths')` and `config('image-to
 ### Clear generated files
 
 Removes the manifest file, then deletes every file it referenced. The manifest is read
-and removed under its write lock; the `.lock` file stays in place.
+and removed under its write lock; the `.lock` file stays in place. Each file is then
+deleted under the same lock, after the command reads the manifest again: a request
+that missed in the meantime and adopted a file keeps it.
 
 ```bash
 php artisan imagetools:clear
@@ -394,6 +451,56 @@ A rebuild that finds the request larger than the source prints
 > back over the command's changes. When the lock cannot be taken, the write goes
 > ahead without it and a warning is logged.
 
+### Prune orphan files
+
+Deletes **orphans**: generated files on the output disk that no entry of the manifest
+references. Orphans stay behind, for example, after a manifest was lost or replaced:
+the new manifest knows only the files that requests asked for since then.
+
+> A changed query is not an orphan case. The entry of the old query stays in the
+> manifest and still references its file, so prune keeps that file.
+
+```bash
+php artisan imagetools:prune --dry-run   # list the orphans, delete nothing
+php artisan imagetools:prune
+```
+
+| Option      | Effect                                                                           |
+|:------------|:---------------------------------------------------------------------------------|
+| `--dry-run` | List the orphans and delete nothing. More than half of orphans gives a warning, not a refusal. |
+| `--force`   | Run also with a manifest under `bootstrap/cache`, or when more than half of the files are orphans. |
+
+- Only files directly in `image-tools/` with a name that ImageTools makes
+  (`<name>--<10 hex>.<ext>`) count. Other files are not touched.
+- A file modified in the last hour is kept. A new file can still be waiting for its
+  manifest entry. A file whose disk gives no modification time is kept too, and the
+  summary counts it as `kept with no time`.
+- Each delete takes the manifest lock and reads the manifest again first. A file that
+  a request adopted in the meantime, or that changed since the listing, is skipped.
+  Unlike a write, the command never runs without the lock.
+- A delete that fails, a listing that fails and a lock that cannot be taken are
+  logged as a warning and printed. The command goes on with the next file, and it
+  exits with a non‑zero status when anything failed.
+
+The command refuses to run, and deletes nothing, in these cases:
+
+- **The manifest is empty.** Every file would count as an orphan. Use
+  `imagetools:clear` to delete every generated file.
+- **The manifest is under `bootstrap/cache`** (the default `manifest_path`). With a
+  zero‑downtime deploy, each release has its own manifest. The files of the release
+  before it, which still serves or can come back after a rollback, would count as
+  orphans. Move the manifest to shared storage
+  (`IMAGE_TOOLS_MANIFEST_PATH=storage/app/image-tools.php`), or pass `--force`.
+- **More than half of the files are orphans.** This usually means a different
+  manifest from the one the web and the workers use. Check it, then pass `--force`.
+
+> **Before you run it:**
+> - Pages cached before the run (a full‑page cache, CDN HTML) can still point to the
+>   deleted files. Clear those caches after it.
+> - The command reads only the default manifest. Do not run it when several hosts with
+>   their own manifest, or extra manifests loaded with `loadManifest($path)`, share
+>   one output disk: their files count as orphans.
+
 ## What gets written
 
 - A processed file on the configured **disk**, under `image-tools/<name>--<hash>.<ext>`.
@@ -416,8 +523,26 @@ A rebuild that finds the request larger than the source prints
           'source' => 'resource/images/icon.png?w=3840',
           'source_disk' => null,
       ],
+      // A media() call: the entry also records the Media key.
+      's3:42/slide.jpg?format=avif&w=1400' => [
+          'path' => 'image-tools/slide--f6e5d4c3b2.avif',
+          'disk' => 'public',
+          'source' => '42/slide.jpg?w=1400&format=avif',
+          'source_disk' => 's3',
+          'media_id' => 42,
+      ],
   ];
   ```
+
+When the manifest has no entry for a request but the file at its name is on the disk
+(for example, a lost manifest), the file is adopted: the entry is written again and
+nothing is encoded. The source is still loaded, because the size check needs it. A
+disk that cannot answer the check (for example S3 credentials without the right to
+list, which turn a missing key into a 403) logs a warning, and the image is encoded.
+
+The check of the stored file runs while the manifest lock is held, so a slow disk
+holds up other writers. Give an S3 or R2 disk an HTTP timeout, for example
+`'http' => ['connect_timeout' => 5, 'timeout' => 30]` in `config/filesystems.php`.
 
 ## Tips
 
@@ -429,6 +554,8 @@ A rebuild that finds the request larger than the source prints
 
 - **`Class ...\ImageTools not found`** — ensure the package is installed and auto‑discovered; run `composer dump-autoload`.
 - **`ImagickException` / missing extension** — install and enable Imagick (preferred) or GD for your PHP runtime.
+- **`asset()` returns `''` and the page renders** — the image could not be generated in the request. For a query that is not valid, or a driver or encoder error, `asset()` reports the exception through Laravel's exception handler and logs the warning `the image could not be generated` with the path and the disk (Laravel does not report a `ValidationException`). A failed upload logs its own warning. A missing source gives `''` with no log. `generate()`, the queued job and the commands still throw.
+- **A WebP or AVIF is larger than expected** — the default optimizer chain encodes it again at its own quality. Add `optimize=0` to the query, or set `optimizers`. See [Optimizers](#optimizers).
 - **`width(): Argument #1 must be of type int`** — pass numeric values in the query (`w=640`, not `w=640px`).
 - **`fit` requires `w` and `h`** — when using `fit`, provide both dimensions.
 - **No URL / 404** — check the configured `disk` has a URL generator (`php artisan storage:link` for `public` disk).
@@ -479,7 +606,7 @@ Thank you for helping make this package better for the community!
 
 ## License
 
-This project is open-sourced software licensed under the [MIT License](https://opensource.org/licenses/MIT).
+This project is open-sourced software licensed under the [MIT License](LICENSE).
 
 You are free to use, modify, and distribute it in your projects, as long as you comply with the terms of the license.
 

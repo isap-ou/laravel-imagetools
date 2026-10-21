@@ -6,8 +6,10 @@ namespace Isapp\ImageTools\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Isapp\ImageTools\Support\Manifest;
+use RuntimeException;
 
 use function app;
 use function base_path;
@@ -49,9 +51,47 @@ class ClearGeneratedImagesCommand extends Command
                 continue;
             }
 
-            Storage::disk($file['disk'])->delete($file['path']);
+            $this->deleteUnlessReferenced($manifest, $file['disk'], $file['path']);
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Delete one file under the manifest lock, unless an entry references it
+     * again. Between the manifest delete and this file, a request can miss and
+     * adopt the file that is still on the disk (see generate()); deleting it then
+     * would leave that new entry pointing to nothing. When the lock cannot be
+     * taken, the file is deleted without the check, as before.
+     */
+    protected function deleteUnlessReferenced(Manifest $manifest, ?string $disk, string $path): void
+    {
+        $ran = false;
+
+        try {
+            $manifest->whileLocked(function (array $entries) use ($disk, $path, &$ran): void {
+                $ran = true;
+
+                foreach ($entries as $entry) {
+                    if ($entry['path'] === $path && $entry['disk'] === $disk) {
+                        return;
+                    }
+                }
+
+                Storage::disk($disk)->delete($path);
+            });
+        } catch (RuntimeException $e) {
+            // A failed delete inside the callback is not a lock failure.
+            if ($ran) {
+                throw $e;
+            }
+
+            Log::warning('ImageTools: the manifest lock could not be taken; the file is deleted without it.', [
+                'disk' => $disk,
+                'path' => $path,
+            ]);
+
+            Storage::disk($disk)->delete($path);
+        }
     }
 }

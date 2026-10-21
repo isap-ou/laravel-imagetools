@@ -7,6 +7,7 @@ namespace Isapp\ImageTools\Support;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 
 use function app;
 use function clearstatcache;
@@ -24,7 +25,7 @@ use function var_export;
  */
 class Manifest
 {
-    /** @var array<string, array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}>> */
+    /** @var array<string, array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}>> */
     protected array $namespaces = ['default' => []];
 
     /** @var array<string, string|null> File signature per namespace; see refresh(). */
@@ -94,7 +95,7 @@ class Manifest
     /**
      * Every entry of a namespace, keyed by canonical seed.
      *
-     * @return array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}>
+     * @return array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}>
      */
     public function all(string $namespace = 'default'): array
     {
@@ -107,7 +108,7 @@ class Manifest
     }
 
     /**
-     * @return array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}|null
+     * @return array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}|null
      */
     public function get(string $namespace, string $key): ?array
     {
@@ -123,7 +124,7 @@ class Manifest
      * jobs) would otherwise write its old copy back over entries that another
      * process changed since — for example, an entry to a file that was deleted.
      *
-     * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}  $info
+     * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}  $info
      */
     public function put(string $namespace, string $key, array $info): void
     {
@@ -134,13 +135,41 @@ class Manifest
             $this->namespaces[$namespace] = $this->read($path);
             $this->namespaces[$namespace][$key] = $info;
 
-            app(Filesystem::class)->replace($path, $this->render($this->namespaces[$namespace]));
+            $this->write($namespace, $path);
+        } finally {
+            $this->unlock($lock);
+        }
+    }
 
-            if (\function_exists('opcache_invalidate')) {
-                @opcache_invalidate($path, true);
+    /**
+     * Record a seed -> stored-file mapping only when the file on disk has no
+     * entry for the key and $when() returns true. Both checks run under the
+     * write lock, so no other writer can change the manifest in between.
+     * Returns whether the entry was written.
+     *
+     * $when must not write the manifest: a second lock in the same process
+     * waits for ever.
+     *
+     * @param  array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}  $info
+     * @param  callable(): bool  $when
+     */
+    public function putIfAbsent(string $namespace, string $key, array $info, callable $when): bool
+    {
+        $path = $this->pathFor($namespace);
+        $lock = $this->lock($path);
+
+        try {
+            $this->namespaces[$namespace] = $this->read($path);
+
+            if (isset($this->namespaces[$namespace][$key]) || ! $when()) {
+                return false;
             }
 
-            $this->signatures[$namespace] = $this->signature($path);
+            $this->namespaces[$namespace][$key] = $info;
+
+            $this->write($namespace, $path);
+
+            return true;
         } finally {
             $this->unlock($lock);
         }
@@ -151,7 +180,7 @@ class Manifest
      * writer can put the old entries back in between. Returns the entries the
      * file held.
      *
-     * @return array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}>
+     * @return array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}>
      */
     public function clear(): array
     {
@@ -176,20 +205,71 @@ class Manifest
     }
 
     /**
-     * Take the exclusive write lock of a manifest file. The lock file sits next
-     * to the real file, so releases that share a symlinked manifest share the
-     * lock too. flock() also works on a read-only handle, so a lock file that
-     * another user created (a deploy that ran as root) still locks. When no lock
-     * can be taken, the write goes ahead without it, as it did before the lock
-     * existed: the lock must never make a write fail.
+     * Run $callback with the entries of the default manifest as they are on disk
+     * now, while this process holds the write lock, and return its result. No
+     * writer can add an entry until the callback returns, so a check of the
+     * entries and the delete of a file that none references cannot be split.
+     *
+     * Unlike a write, this never runs without the lock: it throws instead. The
+     * callback must not write the manifest, because a second lock in the same
+     * process waits for ever.
+     *
+     * @template T
+     *
+     * @param  callable(array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}>): T  $callback
+     * @return T
+     *
+     * @throws RuntimeException when the lock cannot be taken
+     */
+    public function whileLocked(callable $callback): mixed
+    {
+        $lock = $this->acquire($this->path);
+
+        if ($lock === null) {
+            throw new RuntimeException('ImageTools: the manifest lock could not be taken for [' . $this->path . '].');
+        }
+
+        try {
+            $this->namespaces['default'] = $this->read($this->path);
+
+            return $callback($this->namespaces['default']);
+        } finally {
+            $this->unlock($lock);
+        }
+    }
+
+    /**
+     * Take the exclusive write lock of a manifest file. When no lock can be
+     * taken, the write goes ahead without it, as it did before the lock existed:
+     * the lock must never make a write fail.
      *
      * @return resource|null
      */
     protected function lock(string $path)
     {
-        clearstatcache(true, $path);
+        $handle = $this->acquire($path);
 
-        $lockPath = (realpath($path) ?: $path) . '.lock';
+        if ($handle === null) {
+            Log::warning('ImageTools: the manifest lock could not be taken; the manifest is written without it.', [
+                'lock' => $this->lockPath($path),
+            ]);
+        }
+
+        return $handle;
+    }
+
+    /**
+     * The exclusive lock of a manifest file, or null when it cannot be taken. The
+     * lock file sits next to the real file, so releases that share a symlinked
+     * manifest share the lock too. flock() also works on a read-only handle, so
+     * a lock file that another user created (a deploy that ran as root) still
+     * locks.
+     *
+     * @return resource|null
+     */
+    protected function acquire(string $path)
+    {
+        $lockPath = $this->lockPath($path);
 
         $handle = @fopen($lockPath, 'c') ?: @fopen($lockPath, 'r');
 
@@ -201,11 +281,14 @@ class Manifest
             fclose($handle);
         }
 
-        Log::warning('ImageTools: the manifest lock could not be taken; the manifest is written without it.', [
-            'lock' => $lockPath,
-        ]);
-
         return null;
+    }
+
+    protected function lockPath(string $path): string
+    {
+        clearstatcache(true, $path);
+
+        return (realpath($path) ?: $path) . '.lock';
     }
 
     /**
@@ -222,6 +305,21 @@ class Manifest
     }
 
     /**
+     * Write the copy in memory of a namespace to its file. Called only under the
+     * write lock, after the copy was read from the file again.
+     */
+    protected function write(string $namespace, string $path): void
+    {
+        app(Filesystem::class)->replace($path, $this->render($this->namespaces[$namespace]));
+
+        if (\function_exists('opcache_invalidate')) {
+            @opcache_invalidate($path, true);
+        }
+
+        $this->signatures[$namespace] = $this->signature($path);
+    }
+
+    /**
      * The file behind a namespace: the default manifest, or the path that
      * load($path) used as the namespace key.
      */
@@ -235,7 +333,7 @@ class Manifest
      * is dropped first: when opcache does not check timestamps, it still holds
      * the version this process compiled earlier.
      *
-     * @return array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}>
+     * @return array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}>
      */
     protected function read(string $path): array
     {
@@ -283,7 +381,7 @@ class Manifest
     }
 
     /**
-     * @param  array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null}>  $entries
+     * @param  array<string, array{path: string|null, disk: string|null, source?: string, source_disk?: string|null, media_id?: int|string}>  $entries
      */
     protected function render(array $entries): string
     {

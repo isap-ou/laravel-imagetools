@@ -23,6 +23,15 @@ class ConfigTest extends TestCase
         $this->assertFalse($config['queue']);
     }
 
+    public function test_encode_and_upload_settings_keep_the_old_behaviour_by_default(): void
+    {
+        $config = require __DIR__ . '/../../config/image-tools.php';
+
+        $this->assertNull($config['driver']);
+        $this->assertNull($config['optimizers']);
+        $this->assertSame([], $config['put_options']);
+    }
+
     public function test_a_queued_miss_falls_back_to_the_original_by_default(): void
     {
         $config = require __DIR__ . '/../../config/image-tools.php';

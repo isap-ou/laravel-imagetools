@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-10-21
+
+### Added
+- `driver` config key (`IMAGE_TOOLS_DRIVER`, default `null`). It sets the
+  spatie/image driver (`gd`, `imagick`, `vips`, or an `ImageDriver` class name)
+  that loads and encodes the source. With `null`, spatie/image chooses as before: Imagick when the extension
+  is loaded, else GD.
+- `optimize` query option, on by default. `optimize=0` skips the optimizer
+  chain, so the file is the encoder's output at `q`. A switch that is off is part
+  of the canonical name and gets its own file; a switch that is on resolves to
+  the same file as before.
+- `optimizers` config key (default `null`). It sets the optimizer chain in the
+  format of the spatie/laravel-medialibrary `image_optimizers` config (optimizer
+  class => arguments); `[]` runs none. With `null`, the spatie/image-optimizer
+  default chain runs as before. A lossless WebP keeps its own lossless chain.
+- `put_options` config key (default `[]`). Each upload of a generated file passes
+  it to the disk, for example `['CacheControl' => 'public, max-age=31536000, immutable']`.
+- `ImageTools::media($media, $query)` makes a derivative of the original of a
+  spatie/laravel-medialibrary `Media`. It is the same call as
+  `disk($media->disk)->asset($media->getPathRelativeToRoot() . '?' . $query)`.
+  The entry also records the Media key as `media_id`; the key is not part of the
+  canonical name. `GenerateImageJob` takes the key as a new last constructor
+  argument (default `null`); a job that 1.5 queued still runs. The package does
+  not depend on medialibrary. `ImageTools::withMediaId()` carries the key for the
+  job and `imagetools:regenerate`; it is `@internal`.
+- `imagetools:prune` deletes generated files that no entry of the default
+  manifest references (`--dry-run`, `--force`). It keeps files modified in the
+  last hour and files that changed since the listing. It refuses to run with an
+  empty manifest. It also refuses with a manifest under `bootstrap/cache`, or
+  when more than half of the files are orphans; `--force` lifts these two guards
+  only. Each delete runs under the manifest lock.
+- `Manifest::putIfAbsent()` and `Manifest::whileLocked()`. `whileLocked()` never
+  runs without the lock.
+- A `LICENSE` file (MIT).
+
+### Changed
+- `imagetools:clear` deletes each file under the manifest lock, after it reads
+  the manifest again, and keeps a file that a request adopted after the
+  manifest was deleted.
+- `optimize` is a query key now. A template that already had `optimize=0` in
+  1.5 (where the key was ignored) gets a new file name, and a value such as
+  `optimize=maybe` fails validation.
+- The protected `writeDerivative()` reads a null chain as "run no optimizer";
+  before, null meant the default chain. A subclass that overrides it gets a
+  chain object for an ordinary encode.
+- On a manifest miss, `generate()` adopts a non-empty file that is already at the
+  deterministic name, instead of encoding it again. The check and the entry write
+  run under the manifest lock; a first check runs without the lock, so a real
+  miss does not hold it up. A disk that cannot answer the check logs a warning,
+  and the image is encoded. The size check against the source still runs, so a
+  request larger than the source still stores no file. An entry that exists (for
+  example, in `imagetools:regenerate`) is always encoded again.
+- `asset()` no longer fails the page when generation in the request throws (a
+  query that is not valid, a driver or encoder error). It reports the exception,
+  logs a warning with the path and the disk (Laravel does not report a
+  `ValidationException`), and returns `''`. A failed upload also logs a warning.
+  A Media file name with a `?` gives `''` and a warning. `generate()`, the queued job and the commands still
+  throw.
+
 ## [1.5.0] — 2026-10-05
 
 ### Added
@@ -199,7 +258,8 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ## [1.0.0] — 2025-11-05
 - Initial release.
 
-[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.5.0...main
+[Unreleased]: https://github.com/isap-ou/laravel-imagetools/compare/1.6.0...main
+[1.6.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.6.0
 [1.5.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.5.0
 [1.4.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.4.0
 [1.3.0]: https://github.com/isap-ou/laravel-imagetools/releases/tag/1.3.0
